@@ -1,6 +1,7 @@
 _target_: src.datamodules.tscontext_3modal_datamodule.Ts3MDataModule
 dataset:
-  data_dir: './data'
+  data_dir: ${paths.data_dir}
+  modality_mode: all
   satellite_dir: 'satellite'
   seq_len: 24
   label_len: 0
@@ -10,8 +11,9 @@ dataset:
 
 # Dataloader specific
 batch_size: 16
+test_batch_size: 64
 num_workers: 4
-pin_memory: False
+pin_memory: True
 train_ratio: 0.6
 valid_ratio: 0.2
 test_ratio: 0.2

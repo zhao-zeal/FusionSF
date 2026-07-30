@@ -73,6 +73,27 @@ pip install -r requirements.txt
 To help the users reproduce our results, we released the sbatch scripts that we used.
  - FusionSF (145M): ``scripts/fusionSF.sh``
 
+### Modality ablations
+
+The three FusionSF input combinations share the same datamodule, temporal
+split, and target windows. Only the model branches selected by
+`modality_mode` are evaluated:
+
+```bash
+# Historical power only
+python main.py experiment=fusionsf_power_only
+
+# Historical power + NWP
+python main.py experiment=fusionsf_power_nwp
+
+# Historical power + NWP + satellite (full FusionSF)
+python main.py experiment=fusionsf_all_modalities
+```
+
+The corresponding `modality_mode` values are `power`, `power_nwp`, and `all`.
+All three experiment configs use the local CSV logger configured in
+`configs/train.yaml`.
+
 [//]: # (## Hyperparameter tuning:)
 
 [//]: # (We use [orion]&#40;https://github.com/Epistimio/orion&#41; to optimize hyperparameters and it's well suited for launching distributed hyperparameter optimization on clusters. It also integrates nicely with pytorch-lightning as well as hydra through their hydra plugin, so make sure to check their repo if you want more information !)

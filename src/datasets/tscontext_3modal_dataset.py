@@ -122,6 +122,7 @@ class Ts3MDataset(Dataset):
         num_ignored_sites: int = 0,
         norm_nwp: bool = True,
         norm_stl: bool = True,
+        modality_mode: str = "all",
         **kwargs
 
     ) -> None:
@@ -143,6 +144,16 @@ class Ts3MDataset(Dataset):
         self.label_len = label_len
         self.pred_len = pred_len
 
+        valid_modality_modes = {"power", "power_nwp", "all"}
+        if modality_mode not in valid_modality_modes:
+            raise ValueError(
+                f"modality_mode must be one of {sorted(valid_modality_modes)}, "
+                f"but got {modality_mode!r}"
+            )
+        self.modality_mode = modality_mode
+        self.use_nwp = modality_mode in {"power_nwp", "all"}
+        self.use_satellite = modality_mode == "all"
+
         self.n_samples = []
         self.year_mapping = {}
 
@@ -157,11 +168,22 @@ class Ts3MDataset(Dataset):
                             num_sites=num_sites,
                             num_ignored_sites=num_ignored_sites))
 
-        self.data_stl, self.data_stl_times, self.data_stl_coords = (
-            get_data_satellite(data_dir=data_dir, satellite_dir=satellite_dir, norm_stl=norm_stl))
+        if self.use_satellite:
+            self.data_stl, self.data_stl_times, self.data_stl_coords = get_data_satellite(
+                data_dir=data_dir, satellite_dir=satellite_dir, norm_stl=norm_stl
+            )
+        else:
+            self.data_stl = self.data_stl_times = self.data_stl_coords = None
 
-        self.data_ec_grouped, self.ec_start_time = (
-            get_data_nwp(data_dir=data_dir, nwp_file='nwp/nwp.csv', norm_nwp=norm_nwp))
+        if self.use_nwp:
+            self.data_ec_grouped, self.ec_start_time = get_data_nwp(
+                data_dir=data_dir, nwp_file='nwp/nwp.csv', norm_nwp=norm_nwp
+            )
+            first_group_key = next(iter(self.data_ec_grouped.groups))
+            self.nwp_channels = self.data_ec_grouped.get_group(first_group_key).shape[1]
+        else:
+            self.data_ec_grouped = self.ec_start_time = None
+            self.nwp_channels = 17
 
         print('ts context nwp 3 modal dataset prepared, num_sites={}, sites_ignored={}'.format(num_sites,
                                                                                                num_ignored_sites))
@@ -178,19 +200,23 @@ class Ts3MDataset(Dataset):
         y_begin_index = x_end_index
         y_end_index = y_begin_index + self.pred_len
 
-        stl_begin_index = (self.data_sp_time_dt.iloc[x_begin_index] - pd.to_datetime(self.data_stl_times[0]))
-        stl_begin_index = int(stl_begin_index.total_seconds() // 3600)
-        stl_end_index = stl_begin_index + self.seq_len
-
-        ec_begin_index = (self.data_sp_time_dt.iloc[x_begin_index] - self.ec_start_time)
-        ec_begin_index = int(ec_begin_index.total_seconds() // 3600) + self.seq_len
-        ec_end_index = ec_begin_index + self.pred_len
-
-        # get data
-        stl_input = rearrange(self.data_stl[stl_begin_index: stl_end_index], 't h w c -> t c h w')
-        stl_time = self.data_stl_times[stl_begin_index: stl_end_index]
-        stl_coords = rearrange(self.data_stl_coords, 'h w c -> c h w')
-        T, C, H, W = stl_input.shape
+        if self.use_satellite:
+            stl_begin_index = (
+                self.data_sp_time_dt.iloc[x_begin_index]
+                - pd.to_datetime(self.data_stl_times[0])
+            )
+            stl_begin_index = int(stl_begin_index.total_seconds() // 3600)
+            stl_end_index = stl_begin_index + self.seq_len
+            stl_input = rearrange(
+                self.data_stl[stl_begin_index: stl_end_index], 't h w c -> t c h w'
+            )
+            stl_coords = rearrange(self.data_stl_coords, 'h w c -> c h w')
+            _, _, H, W = stl_input.shape
+        else:
+            # Preserve the batch interface without materializing unused 64x64 data.
+            H = W = 1
+            stl_input = torch.zeros(self.seq_len, 1, H, W)
+            stl_coords = torch.zeros(2, H, W)
         
         # print('data_sp_len', self.data_sp_length)
         ts_input = self.data_sp[site_id]['values'][x_begin_index: x_end_index].unsqueeze(-1)
@@ -201,8 +227,16 @@ class Ts3MDataset(Dataset):
 
         lat = np.round(float(ts_coords[0, 0, 0]), 1)
         lon = np.round(float(ts_coords[1, 0, 0]), 1)
-        ec_input = self.data_ec_grouped.get_group((lat, lon)).values
-        ec_input = torch.from_numpy(ec_input[ec_begin_index: ec_end_index])
+        if self.use_nwp:
+            ec_begin_index = (
+                self.data_sp_time_dt.iloc[x_begin_index] - self.ec_start_time
+            )
+            ec_begin_index = int(ec_begin_index.total_seconds() // 3600) + self.seq_len
+            ec_end_index = ec_begin_index + self.pred_len
+            ec_input = self.data_ec_grouped.get_group((lat, lon)).values
+            ec_input = torch.from_numpy(ec_input[ec_begin_index: ec_end_index])
+        else:
+            ec_input = torch.zeros(self.pred_len, self.nwp_channels)
 
         return_tensors = {
             'ts_input': ts_input,  # (torch.Tensor): Station timeseries of shape [T, C2]
@@ -214,4 +248,3 @@ class Ts3MDataset(Dataset):
             'ec_input': ec_input  # # (torch.Tensor): nwp Context frames of shape [T, C4]
         }
         return return_tensors
-

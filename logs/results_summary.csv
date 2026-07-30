@@ -1,0 +1,8 @@
+experiment,status,mae,rmse
+FusionSF three-modal,completed,0.040520,0.085809
+FusionSF Power-only,completed_degenerate,0.178738,0.304493
+FusionSF Power+NWP,completed_degenerate,0.178738,0.304493
+FusionSF zero-shot (train 10-19; test 0-9),completed,0.044397,0.095651
+Chronos-2 Power-only,completed,0.066152,0.136996
+Chronos-2 past+future NWP,completed,0.061014,0.117806
+Chronos-2 future-only NWP,completed,0.063233,0.130328

@@ -1,0 +1,17 @@
+# @package _global_
+
+# Historical power ablation. Uses the same 3-modal datamodule so that data
+# splits and target windows are identical to the other modality experiments.
+defaults:
+  - fusionsf_3modal
+  - _self_
+
+datamodule:
+  dataset:
+    modality_mode: power
+
+pl_module:
+  model:
+    modality_mode: power
+    vq_in_ctx: false
+    vq_in_guide: false

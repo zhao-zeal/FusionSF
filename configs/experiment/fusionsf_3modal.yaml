@@ -24,10 +24,15 @@ seed: 42
 trainer:
   max_epochs: 100
 
+datamodule:
+  dataset:
+    modality_mode: all
+
 
 pl_module:
   use_dp: False
   model:
+    modality_mode: all
     patch_size: [8, 8]
     image_size: [64, 64]
     ctx_channels: 1
@@ -54,6 +59,3 @@ pl_module:
 
   criterion:
     _target_: torch.nn.L1Loss
-logger:
-  wandb:
-    group: "cross_3modal"

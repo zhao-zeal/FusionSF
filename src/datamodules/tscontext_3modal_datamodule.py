@@ -11,6 +11,7 @@ class Ts3MDataModule(LightningDataModule):
         self,
         dataset: Dict[str, Any],
         batch_size: int = 16,
+        test_batch_size: Optional[int] = None,
         num_workers: int = 0,
         pin_memory: bool = False,
         train_ratio: float = 0.6,
@@ -23,6 +24,7 @@ class Ts3MDataModule(LightningDataModule):
         self.train_ratio = train_ratio
         self.valid_ratio = valid_ratio
         self.test_ratio = test_ratio
+        self.test_batch_size = test_batch_size or batch_size
 
         # this line allows to access init params with 'self.hparams' attribute
         # also ensures init params will be stored in ckpt
@@ -67,8 +69,9 @@ class Ts3MDataModule(LightningDataModule):
         return DataLoader(
             dataset=self.data_train,
             batch_size=self.hparams.batch_size,
-            # num_workers=self.hparams.num_workers,
+            num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
+            persistent_workers=self.hparams.num_workers > 0,
             shuffle=True,
         )
 
@@ -76,16 +79,18 @@ class Ts3MDataModule(LightningDataModule):
         return DataLoader(
             dataset=self.data_val,
             batch_size=self.hparams.batch_size,
-            # num_workers=self.hparams.num_workers,
+            num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
+            persistent_workers=self.hparams.num_workers > 0,
             shuffle=False,
         )
 
     def test_dataloader(self):
         return DataLoader(
             dataset=self.data_test,
-            batch_size=1,
-            # num_workers=self.hparams.num_workers,
+            batch_size=self.test_batch_size,
+            num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
+            persistent_workers=self.hparams.num_workers > 0,
             shuffle=False,
         )

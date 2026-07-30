@@ -16,6 +16,8 @@ scheduler:
 
 model:
   _target_: src.models.fusionSF_3modal.FusionSF3M
+  # power: historical power only; power_nwp: power + NWP; all: power + NWP + satellite
+  modality_mode: all
   image_size: [64, 64]
   patch_size: [8, 8]
   pe_type: rope

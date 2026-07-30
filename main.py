@@ -1,5 +1,17 @@
-import pyrootutils
 import os
+import sys
+
+# setuptools 81+ no longer installs pkg_resources, while Lightning 1.8 still
+# imports it. Reuse pip's vendored copy so the original dependency versions can
+# run without downgrading setuptools.
+try:
+    import pkg_resources  # noqa: F401
+except ModuleNotFoundError:
+    from pip._vendor import pkg_resources
+
+    sys.modules["pkg_resources"] = pkg_resources
+
+import pyrootutils
 os.environ['SLURM_JOB_ID'] = '1'
 import torch
 import numpy as np

@@ -1,0 +1,19 @@
+# Datasets and generated artifacts
+data/
+logs/**
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Runtime and experiment tracking
+main.log
+wandb/
+lightning_logs/
+
+# Keep compact experiment summaries
+!logs/results_summary.csv
+!logs/all_results_summary.csv
+!logs/EXPERIMENT_RESULTS.md
+!logs/fusionsf_modality_comparison/
+!logs/fusionsf_modality_comparison/**

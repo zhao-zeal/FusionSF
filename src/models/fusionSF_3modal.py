@@ -292,9 +292,16 @@ class FusionSF3M(nn.Module):
         vq_in_ts: bool = False,
         vq_in_ctx: bool = False,
         vq_in_guide: bool = False,
+        modality_mode: str = "all",
         **kwargs,
     ):
         super().__init__()
+        valid_modality_modes = {"power", "power_nwp", "all"}
+        if modality_mode not in valid_modality_modes:
+            raise ValueError(
+                f"modality_mode must be one of {sorted(valid_modality_modes)}, "
+                f"but got {modality_mode!r}"
+            )
         assert (
             ctx_masking_ratio >= 0 and ctx_masking_ratio < 1
         ), "ctx_masking_ratio must be in [0,1)"
@@ -321,6 +328,19 @@ class FusionSF3M(nn.Module):
         self.vq_in_ts = vq_in_ts
         self.vq_in_ctx = vq_in_ctx
         self.vq_in_guide = vq_in_guide
+        self.modality_mode = modality_mode
+        self.use_nwp = modality_mode in {"power_nwp", "all"}
+        self.use_satellite = modality_mode == "all"
+
+        if vq_in_ctx and not self.use_satellite:
+            raise ValueError("vq_in_ctx requires modality_mode='all'")
+        if vq_in_guide and not self.use_nwp:
+            raise ValueError("vq_in_guide requires NWP to be enabled")
+
+        print(
+            "FusionSF modalities: "
+            f"power=True, nwp={self.use_nwp}, satellite={self.use_satellite}"
+        )
 
         for i in range(2):
             ims = self.image_size[i]
@@ -440,6 +460,16 @@ class FusionSF3M(nn.Module):
             self.guide_vq = ResidualVQ(dim=dim, num_quantizers=8, codebook_size=1024,
                                        shared_codebook=True, kmeans_init=True)
 
+        # Keep the full module layout checkpoint-compatible, but make disabled
+        # ablation branches non-trainable as well as skipping their forward pass.
+        if not self.use_nwp:
+            for module in (self.guide_embedding, self.guide_encoder):
+                module.requires_grad_(False)
+        if not self.use_satellite:
+            for module in (self.to_patch_embedding, self.ctx_encoder, self.mixer):
+                module.requires_grad_(False)
+            self.ctx_mask_token.requires_grad_(False)
+
     def random_masking(self, x, mask_ratio):
         """
         Perform per-sample random masking by per-sample shuffling.
@@ -496,13 +526,16 @@ class FusionSF3M(nn.Module):
         B, T, _, H, W = ctx.shape
         time_coords = self.time_coords_encoder(time_coords)
 
-        # ctx: to patch and to vq
-        ctx = torch.cat([ctx, time_coords], axis=2)
-        ctx = rearrange(ctx, "b t c h w -> (b t) c h w")
-        ctx = self.to_patch_embedding(ctx)  # BT, N, D = 48,64,64
-        if self.vq_in_ctx:
-            ctx, indices, commit_loss_ctx = self.ctx_vq(ctx)
-            commit_loss += commit_loss_ctx
+        # Satellite is intentionally not encoded in the power-only and
+        # power+NWP ablations. The dataloader stays identical across runs so
+        # that windowing, splits, and targets remain directly comparable.
+        if self.use_satellite:
+            ctx = torch.cat([ctx, time_coords], axis=2)
+            ctx = rearrange(ctx, "b t c h w -> (b t) c h w")
+            ctx = self.to_patch_embedding(ctx)  # BT, N, D = 48,64,64
+            if self.vq_in_ctx:
+                ctx, indices, commit_loss_ctx = self.ctx_vq(ctx)
+                commit_loss += commit_loss_ctx
 
         # ts: to vq
         ts = torch.cat([ts, time_coords[..., 0, 0]], axis=-1)
@@ -511,48 +544,51 @@ class FusionSF3M(nn.Module):
             ts, indices, commit_loss_ts = self.ts_vq(ts)
             commit_loss += commit_loss_ts
 
-        # ts_guide: to vq
-        ts_guide = self.guide_embedding(ts_guide)
-        if self.vq_in_guide:
-            ts_guide, indices, commit_loss_guide = self.guide_vq(ts_guide)
-            commit_loss += commit_loss_guide
+        # NWP guide is only encoded for modes that explicitly enable it.
+        if self.use_nwp:
+            ts_guide = self.guide_embedding(ts_guide)
+            if self.vq_in_guide:
+                ts_guide, indices, commit_loss_guide = self.guide_vq(ts_guide)
+                commit_loss += commit_loss_guide
 
         # prepare coordinates
-        ctx_coords = repeat(ctx_coords, "b c h w -> (b t) c h w", t=T)
-        ctx_coords = rearrange(ctx_coords, "b c (h p1) (w p2) -> b c h w (p1 p2)",
-                               p1=self.patch_size[0], p2=self.patch_size[1])
-        ctx_coords = ctx_coords.mean(dim=-1)
-        ts_coords = repeat(ts_coords, "b c h w -> (b t) c h w", t=T)
-        src_enc_pos_emb = self.enc_pos_emb(ctx_coords)
-        tgt_pos_emb = self.enc_pos_emb(ts_coords)
-
-        # vision transformer
-        if self.ctx_masking_ratio > 0 and mask:
-            p = self.ctx_masking_ratio * random.random()
-            ctx, _, ids_restore, ids_keep = self.random_masking(ctx, p)
-            src_enc_pos_emb = tuple(
-                torch.gather(
-                    pos_emb,
-                    dim=1,
-                    index=ids_keep.unsqueeze(-1).repeat(1, 1, pos_emb.shape[-1]),
-                )
-                for pos_emb in src_enc_pos_emb
-            )
-        latent_ctx, self_attention_scores = self.ctx_encoder(ctx, src_enc_pos_emb)
-        
         # temporal transformer
         latent_ts = self.ts_encoder(ts)
         latent_ts = rearrange(latent_ts, "b t c -> (b t) c").unsqueeze(1)
 
-        # temporal transformer
-        latent_guide = self.guide_encoder(ts_guide)  # B,T,64 -> B,T,64
-        latent_guide = rearrange(latent_guide, "b t c -> (b t) c").unsqueeze(1)
-        latent_ts = latent_ts + latent_guide
+        if self.use_nwp:
+            latent_guide = self.guide_encoder(ts_guide)  # B,T,D -> B,T,D
+            latent_guide = rearrange(latent_guide, "b t c -> (b t) c").unsqueeze(1)
+            latent_ts = latent_ts + latent_guide
 
-        # cross attention
-        latent_ts, cross_attention_scores = self.mixer(
-            latent_ctx, latent_ts, src_enc_pos_emb, tgt_pos_emb
-        )
+        if self.use_satellite:
+            ctx_coords = repeat(ctx_coords, "b c h w -> (b t) c h w", t=T)
+            ctx_coords = rearrange(
+                ctx_coords,
+                "b c (h p1) (w p2) -> b c h w (p1 p2)",
+                p1=self.patch_size[0],
+                p2=self.patch_size[1],
+            ).mean(dim=-1)
+            ts_coords = repeat(ts_coords, "b c h w -> (b t) c h w", t=T)
+            src_enc_pos_emb = self.enc_pos_emb(ctx_coords)
+            tgt_pos_emb = self.enc_pos_emb(ts_coords)
+
+            if self.ctx_masking_ratio > 0 and mask:
+                p = self.ctx_masking_ratio * random.random()
+                ctx, _, ids_restore, ids_keep = self.random_masking(ctx, p)
+                src_enc_pos_emb = tuple(
+                    torch.gather(
+                        pos_emb,
+                        dim=1,
+                        index=ids_keep.unsqueeze(-1).repeat(1, 1, pos_emb.shape[-1]),
+                    )
+                    for pos_emb in src_enc_pos_emb
+                )
+            latent_ctx, self_attention_scores = self.ctx_encoder(ctx, src_enc_pos_emb)
+            latent_ts, cross_attention_scores = self.mixer(
+                latent_ctx, latent_ts, src_enc_pos_emb, tgt_pos_emb
+            )
+
         latent_ts = latent_ts.squeeze(1)
         latent_ts = self.ts_enctodec(rearrange(latent_ts, "(b t) c -> b t c", b=B))
 

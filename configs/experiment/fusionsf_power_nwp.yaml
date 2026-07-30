@@ -1,0 +1,15 @@
+# @package _global_
+
+# Historical power + NWP ablation; satellite images are not encoded.
+defaults:
+  - fusionsf_3modal
+  - _self_
+
+datamodule:
+  dataset:
+    modality_mode: power_nwp
+
+pl_module:
+  model:
+    modality_mode: power_nwp
+    vq_in_ctx: false
