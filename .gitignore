@@ -1,6 +1,7 @@
 # Datasets and generated artifacts
 data/
 logs/**
+outputs/**
 
 # Python caches
 __pycache__/

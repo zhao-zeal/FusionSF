@@ -45,7 +45,27 @@ class Ts3MDataModule(LightningDataModule):
         valid_ratio = self.valid_ratio
         test_ratio = self.test_ratio
         if not self.data_train and not self.data_val and not self.data_test:
-            data_all = Ts3MDataset(**self.hparams.dataset)
+            data_all = Ts3MDataset(
+                **self.hparams.dataset,
+                train_ratio=train_ratio,
+                valid_ratio=valid_ratio,
+                test_ratio=test_ratio,
+            )
+            self.data_all = data_all
+            if data_all.pipeline_version == "fixed_v1":
+                split_ids = np.array([
+                    {"train": 0, "validation": 1, "test": 2}[record.split]
+                    for _ in data_all.data_sp for record in data_all.window_records
+                ])
+                self.data_train = Subset(data_all, np.flatnonzero(split_ids == 0))
+                self.data_val = Subset(data_all, np.flatnonzero(split_ids == 1))
+                self.data_test = Subset(data_all, np.flatnonzero(split_ids == 2))
+                if self.hparams.dataset.get('dataset_test'):
+                    raise NotImplementedError(
+                        "fixed_v1 cross-site dataset_test needs an explicitly shared training scaler; "
+                        "it is intentionally blocked to prevent silent leakage"
+                    )
+                return
             data_len = len(data_all)
             all_indices = np.arange(0, int(data_len))
             all_indices = all_indices.reshape([data_all.num_sites - data_all.num_ignored_sites, -1])

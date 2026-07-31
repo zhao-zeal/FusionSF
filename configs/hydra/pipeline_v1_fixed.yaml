@@ -1,0 +1,9 @@
+defaults:
+  - default
+  - _self_
+
+run:
+  dir: ${paths.root_dir}/outputs/${experiment_version}/${experiment_id}
+sweep:
+  dir: ${paths.root_dir}/outputs/${experiment_version}/multiruns/${experiment_id}
+  subdir: ${hydra.job.num}

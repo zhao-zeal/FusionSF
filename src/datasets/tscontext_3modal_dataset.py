@@ -11,8 +11,10 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset
 from einops import rearrange, repeat
 
+from src.datasets.split_utils import build_target_time_windows, chronological_boundaries
 
-def get_data_spower(data_dir, solar_power_file, num_sites=10, num_ignored_sites=0):
+
+def get_data_spower(data_dir, solar_power_file, num_sites=10, num_ignored_sites=0, strict=False):
     """
     Parameters
     -----------
@@ -38,14 +40,23 @@ def get_data_spower(data_dir, solar_power_file, num_sites=10, num_ignored_sites=
     """
     data_df = pd.read_csv(os.path.join(data_dir, solar_power_file),
                           parse_dates=['datetime'])
-    data_df = data_df.fillna(0)
+    if strict and data_df[['datetime', 'power', 'site']].isna().any().any():
+        raise ValueError("fixed_v1 does not silently replace missing power/timestamp/site values")
+    if not strict:
+        data_df = data_df.fillna(0)
     data_sp = []
+    reference_times = None
     for i, (k, v) in enumerate(data_df.groupby('site')):
         if i >= num_sites:
             break
         if i < num_ignored_sites:
             continue
         print('dataset k,v len', k, len(v))
+        site_times = pd.DatetimeIndex(v['datetime'])
+        if reference_times is None:
+            reference_times = site_times
+        elif len(site_times) != len(reference_times) or not site_times.equals(reference_times):
+            raise ValueError(f"site {k} timestamps are not aligned with the first selected site")
         lats_lons = torch.tensor([v['lat'].values[0], v['lon'].values[0]])
         # v[v['power'] < 0]['power'] = 0
         values = torch.from_numpy(v['power'].values)
@@ -61,7 +72,9 @@ def get_data_spower(data_dir, solar_power_file, num_sites=10, num_ignored_sites=
     return data_sp, time, time_dt, length
 
 
-def get_data_satellite(data_dir, satellite_dir, norm_stl=True, num_feature=1):
+def get_data_satellite(
+    data_dir, satellite_dir, norm_stl=True, num_feature=1, fit_end_time=None, return_scaler=False
+):
     """
     Parameters
     -----------
@@ -73,17 +86,32 @@ def get_data_satellite(data_dir, satellite_dir, norm_stl=True, num_feature=1):
     print('load satellite from: [{}]'.format(os.path.join(data_dir, satellite_dir)))
     array_satellite = np.load(os.path.join(data_dir, satellite_dir, 'satellite.npy'))
     T, H, W, C = array_satellite.shape
+    scaler_state = None
     if norm_stl:
         scaler = StandardScaler()
-        array_satellite = scaler.fit_transform(array_satellite.reshape(T, -1)).reshape(T, H, W, C)
+        flattened = array_satellite.reshape(T, -1)
+        if fit_end_time is None:
+            fit_values = flattened
+            fit_range = "full_dataset_legacy"
+        else:
+            satellite_times = pd.to_datetime(np.load(os.path.join(data_dir, satellite_dir, 'satellite_times.npy')))
+            fit_mask = satellite_times < pd.Timestamp(fit_end_time)
+            if not fit_mask.any():
+                raise ValueError("no satellite samples fall inside the training scaler range")
+            fit_values = flattened[fit_mask]
+            fit_range = f"{satellite_times[fit_mask].min()}..{satellite_times[fit_mask].max()}"
+        scaler.fit(fit_values)
+        array_satellite = scaler.transform(flattened).reshape(T, H, W, C)
+        scaler_state = {"mean": scaler.mean_, "scale": scaler.scale_, "fit_range": fit_range}
     data_satellite = torch.from_numpy(array_satellite)
     data_satellite_coords = torch.from_numpy(
         np.load(os.path.join(data_dir, satellite_dir, 'satellite_coords.npy')))
     data_satellite_times = np.load(os.path.join(data_dir, satellite_dir, 'satellite_times.npy'))
-    return data_satellite[..., :num_feature], data_satellite_times, data_satellite_coords
+    result = (data_satellite[..., :num_feature], data_satellite_times, data_satellite_coords)
+    return result + (scaler_state,) if return_scaler else result
 
 
-def get_data_nwp(data_dir, nwp_file, norm_nwp=True):
+def get_data_nwp(data_dir, nwp_file, norm_nwp=True, fit_end_time=None, return_scaler=False):
     """
     Parameters
     -----------
@@ -92,22 +120,46 @@ def get_data_nwp(data_dir, nwp_file, norm_nwp=True):
     nwp_file : str
             Relative directory path where the numerical weather prediction (nwp) file is located in data_dir.
     """
-    df = pd.read_csv(os.path.join(data_dir, nwp_file),
-                     parse_dates=['fcst_date']).interpolate()
+    df = pd.read_csv(os.path.join(data_dir, nwp_file), parse_dates=['fcst_date'])
+    df['lat'] = np.round(df['lat'], 1)
+    df['lon'] = np.round(df['lon'], 1)
+    value_columns = df.columns.drop(['fcst_date', 'lat', 'lon'])
+    # fixed_v1 interpolates independently within each grid point. The legacy call keeps
+    # the original whole-frame interpolation behavior for exact reproducibility.
+    if fit_end_time is None:
+        df = df.interpolate()
+    else:
+        df = df.sort_values(['lat', 'lon', 'fcst_date'])
+        df[value_columns] = df.groupby(['lat', 'lon'], sort=False)[value_columns].transform(
+            lambda group: group.interpolate(limit_direction='both')
+        )
     # get nwp start time
     nwp_start_time = df['fcst_date'].iloc[0]
 
     # process nwp dataframe
-    df['lat'] = np.round(df['lat'], 1)
-    df['lon'] = np.round(df['lon'], 1)
+    times = df['fcst_date'].copy()
     df = df.drop(columns=['fcst_date'])
     # normalize nwp dataframe
     columns = df.columns.drop(['lat', 'lon'])
+    scaler_state = None
     if norm_nwp:
         scaler = StandardScaler()
-        df[columns] = pd.DataFrame(scaler.fit_transform(df[columns]), columns=columns)
-    data_nwp_grouped = df.groupby(['lat', 'lon'])
-    return data_nwp_grouped, nwp_start_time
+        fit_mask = np.ones(len(df), dtype=bool) if fit_end_time is None else times < pd.Timestamp(fit_end_time)
+        scaler.fit(df.loc[fit_mask, columns])
+        df.loc[:, columns] = scaler.transform(df[columns])
+        scaler_state = {
+            "mean": scaler.mean_, "scale": scaler.scale_,
+            "fit_range": "full_dataset_legacy" if fit_end_time is None else f"{times[fit_mask].min()}..{times[fit_mask].max()}",
+        }
+    if fit_end_time is None:
+        # Exact legacy representation includes the two grouping coordinates as guide channels.
+        data_nwp_grouped = df.groupby(['lat', 'lon'])
+    else:
+        # fixed_v1 keeps coordinates out of weather features; station coordinates are supplied
+        # separately to the model.
+        data_nwp_grouped = df.set_index(['lat', 'lon']).groupby(level=['lat', 'lon'])
+    result = (data_nwp_grouped, nwp_start_time)
+    return result + (scaler_state,) if return_scaler else result
 
 
 class Ts3MDataset(Dataset):
@@ -123,6 +175,11 @@ class Ts3MDataset(Dataset):
         norm_nwp: bool = True,
         norm_stl: bool = True,
         modality_mode: str = "all",
+        data_pipeline: dict = None,
+        train_ratio: float = 0.6,
+        valid_ratio: float = 0.2,
+        test_ratio: float = 0.2,
+        stride: int = 1,
         **kwargs
 
     ) -> None:
@@ -153,6 +210,10 @@ class Ts3MDataset(Dataset):
         self.modality_mode = modality_mode
         self.use_nwp = modality_mode in {"power_nwp", "all"}
         self.use_satellite = modality_mode == "all"
+        self.data_pipeline = dict(data_pipeline or {"version": "legacy_v0"})
+        self.pipeline_version = self.data_pipeline.get("version", "legacy_v0")
+        if self.pipeline_version not in {"legacy_v0", "fixed_v1"}:
+            raise ValueError("data_pipeline.version must be legacy_v0 or fixed_v1")
 
         self.n_samples = []
         self.year_mapping = {}
@@ -166,19 +227,41 @@ class Ts3MDataset(Dataset):
             get_data_spower(data_dir=data_dir,
                             solar_power_file='solar_power/solar_power.csv',
                             num_sites=num_sites,
-                            num_ignored_sites=num_ignored_sites))
+                            num_ignored_sites=num_ignored_sites,
+                            strict=self.pipeline_version == "fixed_v1"))
+
+        self.window_records = None
+        self.scaler_state = {}
+        fit_end_time = None
+        if self.pipeline_version == "fixed_v1":
+            self.window_records = build_target_time_windows(
+                self.data_sp_time_dt, self.seq_len, self.pred_len,
+                train_ratio, valid_ratio, test_ratio, stride,
+            )
+            fit_end_time = chronological_boundaries(
+                self.data_sp_time_dt, train_ratio, valid_ratio, test_ratio
+            )["train"][1]
+            self.scaler_state["fit_end_exclusive"] = str(fit_end_time)
 
         if self.use_satellite:
-            self.data_stl, self.data_stl_times, self.data_stl_coords = get_data_satellite(
-                data_dir=data_dir, satellite_dir=satellite_dir, norm_stl=norm_stl
+            satellite_result = get_data_satellite(
+                data_dir=data_dir, satellite_dir=satellite_dir, norm_stl=norm_stl,
+                fit_end_time=fit_end_time, return_scaler=self.pipeline_version == "fixed_v1"
             )
+            self.data_stl, self.data_stl_times, self.data_stl_coords = satellite_result[:3]
+            if len(satellite_result) == 4:
+                self.scaler_state["satellite"] = satellite_result[3]
         else:
             self.data_stl = self.data_stl_times = self.data_stl_coords = None
 
         if self.use_nwp:
-            self.data_ec_grouped, self.ec_start_time = get_data_nwp(
-                data_dir=data_dir, nwp_file='nwp/nwp.csv', norm_nwp=norm_nwp
+            nwp_result = get_data_nwp(
+                data_dir=data_dir, nwp_file='nwp/nwp.csv', norm_nwp=norm_nwp,
+                fit_end_time=fit_end_time, return_scaler=self.pipeline_version == "fixed_v1"
             )
+            self.data_ec_grouped, self.ec_start_time = nwp_result[:2]
+            if len(nwp_result) == 3:
+                self.scaler_state["nwp"] = nwp_result[2]
             first_group_key = next(iter(self.data_ec_grouped.groups))
             self.nwp_channels = self.data_ec_grouped.get_group(first_group_key).shape[1]
         else:
@@ -189,13 +272,21 @@ class Ts3MDataset(Dataset):
                                                                                                num_ignored_sites))
 
     def __len__(self) -> int:
+        if self.window_records is not None:
+            return len(self.window_records) * len(self.data_sp)
         return (self.data_sp_length - self.seq_len - self.pred_len + 1) * (self.num_sites - self.num_ignored_sites)
 
     def __getitem__(self, idx: int):
-        site_id = idx // (self.data_sp_length-self.seq_len-self.pred_len+1)
+        if self.window_records is not None:
+            windows_per_site = len(self.window_records)
+            site_id = idx // windows_per_site
+            record = self.window_records[idx % windows_per_site]
+            x_begin_index = record.start_index
+        else:
+            site_id = idx // (self.data_sp_length-self.seq_len-self.pred_len+1)
 
-        # get index
-        x_begin_index = idx % (self.data_sp_length-self.seq_len-self.pred_len+1)
+            # get index
+            x_begin_index = idx % (self.data_sp_length-self.seq_len-self.pred_len+1)
         x_end_index = x_begin_index + self.seq_len
         y_begin_index = x_end_index
         y_end_index = y_begin_index + self.pred_len
@@ -245,6 +336,23 @@ class Ts3MDataset(Dataset):
             'ts_coords': ts_coords,  # (torch.Tensor): Station coordinates of shape [2, 1, 1]
             'stl_input': stl_input,  # (torch.Tensor): Satellite image (stl) Context frames of shape [T, C1, H, W]
             'stl_coords': stl_coords,  # (torch.Tensor): Coordinates of context frames of shape [2, H, W]
-            'ec_input': ec_input  # # (torch.Tensor): nwp Context frames of shape [T, C4]
+            'ec_input': ec_input,  # (torch.Tensor): NWP guide [pred_len, channels]
+            # [satellite_available, nwp_available]; values are distinct from data zeros.
+            'modality_availability': torch.tensor(
+                [float(self.use_satellite), float(self.use_nwp)], dtype=torch.float32
+            ),
+            'site_id': torch.tensor(int(self.data_sp[site_id]['site']), dtype=torch.long),
+            'input_start_timestamp': torch.tensor(pd.Timestamp(self.data_sp_time_dt.iloc[x_begin_index]).value),
+            'input_end_timestamp': torch.tensor(pd.Timestamp(self.data_sp_time_dt.iloc[x_end_index - 1]).value),
+            'forecast_start_timestamp': torch.tensor(pd.Timestamp(self.data_sp_time_dt.iloc[y_begin_index]).value),
+            'forecast_end_timestamp': torch.tensor(pd.Timestamp(self.data_sp_time_dt.iloc[y_end_index - 1]).value),
+            'forecast_timestamps': torch.tensor(
+                pd.DatetimeIndex(self.data_sp_time_dt.iloc[y_begin_index:y_end_index]).asi8.copy(),
+                dtype=torch.long,
+            ),
         }
+        if self.window_records is not None:
+            return_tensors['split_id'] = torch.tensor(
+                {'train': 0, 'validation': 1, 'test': 2}[record.split], dtype=torch.int8
+            )
         return return_tensors

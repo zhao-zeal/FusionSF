@@ -10,6 +10,10 @@
  
 </div>
 
+> Experiment provenance: first runs are indexed as `baseline_v0_legacy`; new leakage-safe work
+> uses `pipeline_v1_fixed`. Read [experiments/README.md](experiments/README.md) before running or
+> comparing experiments. Historical artifacts under `logs/` remain in place and unchanged.
+
 ## Description
 
 This is the official repository to the paper ["FusionSF: Fuse Heterogeneous Modalities in a Vector Quantized Framework for Robust Solar Power Forecasting"](https://arxiv.org/) by **Ziqing Ma**\*, **Wenwei Wang**\*, **Tian Zhou**\*, Chao Chen, Bingqing Peng, Liang Sun and Rong Jin.
