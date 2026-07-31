@@ -115,7 +115,7 @@ def main():
         append_checkpoint_evaluation(
             ROOT / "experiments/experiment_registry.csv", cfg,
             f"{cfg.experiment_id}__eval_{mode}", mode, mode_dir, metrics,
-            str(args.checkpoint_path),
+            str(args.checkpoint_path), datamodule,
         )
     manifest = {
         "source_experiment_id": cfg.experiment_id,

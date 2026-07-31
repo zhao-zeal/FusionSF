@@ -132,7 +132,7 @@ def train(cfg: DictConfig) -> Tuple[dict, dict]:
         fixed_metrics = save_test_outputs(Path(cfg.paths.output_dir), pl_module.out_dict)
         append_experiment_registry(
             Path(cfg.paths.root_dir) / "experiments/experiment_registry.csv",
-            cfg, fixed_metrics, str(ckpt_path),
+            cfg, fixed_metrics, str(ckpt_path), datamodule,
         )
     else:
         # Preserve the original baseline_v0_legacy artifact layout.

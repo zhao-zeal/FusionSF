@@ -102,7 +102,43 @@ def save_test_outputs(output_dir: Path, out_dict: dict) -> dict:
     return metrics
 
 
-def append_experiment_registry(registry_path: Path, cfg, metrics: dict, checkpoint_path: str) -> None:
+def format_site_ids(site_ids) -> str:
+    """Format an explicit, possibly non-contiguous site set without inventing ranges."""
+    unique_ids = sorted({int(site_id) for site_id in site_ids})
+    if not unique_ids:
+        raise ValueError("site IDs must not be empty")
+    return "|".join(str(site_id) for site_id in unique_ids)
+
+
+def actual_site_ids(datamodule) -> tuple[str, str]:
+    """Return registry-ready train/test IDs from datasets actually loaded by the datamodule."""
+    if getattr(datamodule, "data_all", None) is None:
+        raise ValueError("datamodule.setup() must run before experiment registration")
+    train_site_ids = [int(site["site"]) for site in datamodule.data_all.data_sp]
+    cross_site_dataset = getattr(datamodule, "data_test_all", None)
+    if cross_site_dataset is None:
+        test_site_ids = train_site_ids
+    else:
+        test_site_ids = [int(site["site"]) for site in cross_site_dataset.data_sp]
+    return format_site_ids(train_site_ids), format_site_ids(test_site_ids)
+
+
+def infer_modalities(model_cfg) -> str:
+    """Infer registered inputs from the single authoritative modality_mode setting."""
+    mode = model_cfg.modality_mode
+    if mode not in {"power", "power_nwp", "all"}:
+        raise ValueError(f"unknown modality_mode={mode!r}")
+    modalities = ["power"]
+    if mode in {"power_nwp", "all"}:
+        modalities.append("future_nwp")
+    if mode == "all":
+        modalities.append("satellite")
+    return "|".join(modalities)
+
+
+def append_experiment_registry(
+    registry_path: Path, cfg, metrics: dict, checkpoint_path: str, datamodule,
+) -> None:
     """Append one fixed_v1 run after successful evaluation; reject duplicate experiment IDs."""
     registry_path = Path(registry_path)
     with registry_path.open(newline="", encoding="utf-8") as handle:
@@ -111,11 +147,7 @@ def append_experiment_registry(registry_path: Path, cfg, metrics: dict, checkpoi
     if any(row["experiment_id"] == cfg.experiment_id for row in rows):
         raise FileExistsError(f"experiment_id already registered: {cfg.experiment_id}")
     dataset, model = cfg.datamodule.dataset, cfg.pl_module.model
-    modalities = ["power"]
-    if model.modality_mode in {"power_nwp", "all"}:
-        modalities.append("future_nwp")
-    if model.modality_mode == "all":
-        modalities.append("satellite")
+    train_sites, test_sites = actual_site_ids(datamodule)
     row = {name: "" for name in fieldnames}
     row.update({
         "experiment_id": cfg.experiment_id,
@@ -123,14 +155,14 @@ def append_experiment_registry(registry_path: Path, cfg, metrics: dict, checkpoi
         "status": "valid_or_debug",
         "date": pd.Timestamp.now().strftime("%Y-%m-%d"),
         "git_commit": _command(["git", "rev-parse", "HEAD"]),
-        "dataset": "MMSP", "train_sites": f"0-{dataset.num_sites - 1}",
-        "test_sites": f"0-{dataset.num_sites - 1}", "seq_len": dataset.seq_len,
+        "dataset": "MMSP", "train_sites": train_sites,
+        "test_sites": test_sites, "seq_len": dataset.seq_len,
         "pred_len": dataset.pred_len, "train_ratio": cfg.datamodule.train_ratio,
         "valid_ratio": cfg.datamodule.valid_ratio, "test_ratio": cfg.datamodule.test_ratio,
         "seed": cfg.seed, "batch_size": cfg.datamodule.batch_size,
         "learning_rate": cfg.pl_module.optimizer.lr, "max_epochs": cfg.trainer.max_epochs,
         "checkpoint_metric": cfg.callbacks.model_checkpoint.monitor,
-        "modalities": "|".join(modalities),
+        "modalities": infer_modalities(model),
         "missing_modality_setting": cfg.pl_module.evaluation_mode,
         "ctx_masking_ratio": model.ctx_masking_ratio, "ts_masking_ratio": model.ts_masking_ratio,
         "vq_in_ts": model.vq_in_ts, "vq_in_ctx": model.vq_in_ctx, "vq_in_guide": model.vq_in_guide,
@@ -147,7 +179,7 @@ def append_experiment_registry(registry_path: Path, cfg, metrics: dict, checkpoi
         "embedding_extracted": "false",
     })
     with registry_path.open("a", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, lineterminator="\n")
         writer.writerow(row)
 
 
@@ -169,7 +201,7 @@ def missing_modality_interpretation(model, evaluation_mode: str) -> str:
 
 def append_checkpoint_evaluation(
     registry_path: Path, cfg, evaluation_id: str, evaluation_mode: str,
-    output_dir: Path, metrics: dict, checkpoint_path: str,
+    output_dir: Path, metrics: dict, checkpoint_path: str, datamodule,
 ) -> None:
     """Register one checkpoint-only evaluation without pretending it is a training run."""
     registry_path = Path(registry_path)
@@ -179,19 +211,19 @@ def append_checkpoint_evaluation(
     if any(row["experiment_id"] == evaluation_id for row in rows):
         raise FileExistsError(f"evaluation already registered: {evaluation_id}")
     dataset, model = cfg.datamodule.dataset, cfg.pl_module.model
-    modalities = "power|future_nwp|satellite"
+    train_sites, test_sites = actual_site_ids(datamodule)
     row = {name: "" for name in fieldnames}
     row.update({
         "experiment_id": evaluation_id, "experiment_version": "pipeline_v1_fixed",
-        "status": "valid_or_debug", "date": pd.Timestamp.now().strftime("%Y-%m-%d"),
+        "status": "checkpoint_evaluation", "date": pd.Timestamp.now().strftime("%Y-%m-%d"),
         "git_commit": _command(["git", "rev-parse", "HEAD"]), "dataset": "MMSP",
-        "train_sites": f"0-{dataset.num_sites - 1}", "test_sites": f"0-{dataset.num_sites - 1}",
+        "train_sites": train_sites, "test_sites": test_sites,
         "seq_len": dataset.seq_len, "pred_len": dataset.pred_len,
         "train_ratio": cfg.datamodule.train_ratio, "valid_ratio": cfg.datamodule.valid_ratio,
         "test_ratio": cfg.datamodule.test_ratio, "seed": cfg.seed,
         "batch_size": cfg.datamodule.test_batch_size, "learning_rate": cfg.pl_module.optimizer.lr,
         "max_epochs": cfg.trainer.max_epochs, "checkpoint_metric": cfg.callbacks.model_checkpoint.monitor,
-        "modalities": modalities, "missing_modality_setting": evaluation_mode,
+        "modalities": infer_modalities(model), "missing_modality_setting": evaluation_mode,
         "ctx_masking_ratio": model.ctx_masking_ratio, "ts_masking_ratio": model.ts_masking_ratio,
         "vq_in_ts": model.vq_in_ts, "vq_in_ctx": model.vq_in_ctx, "vq_in_guide": model.vq_in_guide,
         "data_split_version": "chronological_target_split_v1",
@@ -201,11 +233,11 @@ def append_checkpoint_evaluation(
         "target_path": str(Path(output_dir).resolve() / "targets.npy"),
         "mae": metrics["mae"], "rmse": metrics["rmse"], "mape": metrics["mape"],
         "notes": (
-            "Checkpoint-only sensitivity evaluation; raw registry metrics. "
+            "Checkpoint-only evaluation; no retraining was performed. Raw registry metrics. "
             + missing_modality_interpretation(model, evaluation_mode)
             + f"clipped_mae={metrics['clipped_mae']}; clipped_rmse={metrics['clipped_rmse']}"
         ),
         "embedding_extracted": "false",
     })
     with registry_path.open("a", newline="", encoding="utf-8") as handle:
-        csv.DictWriter(handle, fieldnames=fieldnames).writerow(row)
+        csv.DictWriter(handle, fieldnames=fieldnames, lineterminator="\n").writerow(row)

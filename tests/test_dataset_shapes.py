@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from sklearn.preprocessing import StandardScaler
 
 from src.datasets.tscontext_3modal_dataset import Ts3MDataset
 
@@ -32,7 +33,7 @@ def test_fixed_dataset_returns_aligned_shapes_and_metadata(tmp_path):
     assert sample["forecast_start_timestamp"] > sample["input_end_timestamp"]
 
 
-def test_cross_site_dataset_reuses_training_site_scalers(tmp_path):
+def test_cross_site_dataset_reuses_training_site_scalers_without_refit(tmp_path, monkeypatch):
     (tmp_path / "solar_power").mkdir()
     (tmp_path / "satellite").mkdir()
     (tmp_path / "nwp").mkdir()
@@ -53,12 +54,23 @@ def test_cross_site_dataset_reuses_training_site_scalers(tmp_path):
         str(tmp_path), seq_len=24, pred_len=6, num_sites=2, num_ignored_sites=1,
         modality_mode="all", data_pipeline={"version": "fixed_v1"},
     )
+
+    def fail_if_fit_is_called(*args, **kwargs):
+        raise AssertionError("StandardScaler.fit must not be called for unseen-site transform")
+
+    monkeypatch.setattr(StandardScaler, "fit", fail_if_fit_is_called)
     unseen_test = Ts3MDataset(
         str(tmp_path), seq_len=24, pred_len=6, num_sites=1, num_ignored_sites=0,
         modality_mode="all", data_pipeline={"version": "fixed_v1"},
         precomputed_scaler_state=training.scaler_state,
     )
     assert training.scaler_state["nwp"]["fit_coordinates"] == [(2.0, 3.0)]
+    assert set(training.scaler_state["nwp"]) >= {
+        "fit_range", "fit_coordinates", "feature_names", "mean", "scale",
+    }
+    training_coordinates = set(map(tuple, training.scaler_state["nwp"]["fit_coordinates"]))
+    test_coordinates = {(1.0, 3.0)}
+    assert training_coordinates.isdisjoint(test_coordinates)
     assert np.array_equal(unseen_test.scaler_state["nwp"]["mean"], training.scaler_state["nwp"]["mean"])
     assert unseen_test.scaler_state["nwp"]["source"] == "external_training_dataset"
     assert unseen_test.scaler_state["satellite"]["source"] == "external_training_dataset"

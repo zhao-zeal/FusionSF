@@ -1,0 +1,23 @@
+# @package _global_
+
+defaults:
+  - fusionsf_pipeline_v1_preliminary
+  - override /datamodule: tscontext_3modal_fixed_v1_zeroshot.yaml
+  - _self_
+
+experiment_id: ${now:%Y%m%d_%H%M%S}_fusionsf_fixedv1_prelim_zeroshot_train10_19_test0_9_seed${seed}
+task_name: ${experiment_id}
+
+datamodule:
+  batch_size: 16
+  test_batch_size: 64
+  dataset:
+    num_sites: 20
+    num_ignored_sites: 10
+    dataset_test:
+      num_sites: 10
+      num_ignored_sites: 0
+
+pl_module:
+  model:
+    modality_mode: all

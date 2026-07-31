@@ -1,5 +1,45 @@
 # Experiment pipeline changelog
 
+## pipeline_v1_fixed registry and cross-site hardening — 2026-07-31
+
+- Registry training and checkpoint-evaluation rows now read explicit site IDs from the datasets
+  actually loaded by the datamodule. Cross-site runs record `10|...|19` versus `0|...|9`; no
+  contiguous-range inference is used.
+- Training and checkpoint evaluation share one modality inference function, so power-only and
+  power+NWP checkpoints are no longer registered as three-modal models.
+- Checkpoint-only rows use a distinct status and explicitly state that no retraining occurred;
+  missing-modality notes retain the distinction between diagnostics and dropout-trained
+  robustness evaluations.
+- Added regression coverage proving that unseen-site construction with injected satellite and
+  NWP scaler state never calls `StandardScaler.fit`. Training scaler metadata retains fit time,
+  training coordinates, and feature order, and training/test coordinates are asserted disjoint.
+- Added a bounded fixed_v1 zero-shot smoke configuration. Existing experiment directories and
+  legacy_v0 records remain unchanged.
+
+### Validation
+
+- `23` unit tests passed, including a fail-on-fit unseen-site construction test.
+- The bounded real MMSP smoke loaded training sites `10|11|12|13|14|15|16|17|18|19` and test
+  sites `0|1|2|3|4|5|6|7|8|9`, with no overlap and two batches per train/validation/test stage.
+- The smoke registry row uses `train_sites_and_time_only_fit_v1`. Its NWP scaler fit range is
+  `2021-01-02 00:00:00..2021-11-18 23:00:00`, records the 15 feature names, and records only the
+  unique coordinates belonging to the selected training sites.
+
+### Comparable preliminary suite
+
+- Added one shared seed-42, 10-epoch fixed_v1 contract and four derived configurations: Power,
+  Power+future-NWP, Full, and Full zero-shot (train 10–19, test 0–9).
+- The suite keeps optimizer, masking, split ratios, batch sizes, deterministic trainer settings,
+  and scaler version identical while changing only the intended modality/site assignment.
+- A composition test checks the resolved Hydra configs before any training is allowed to start.
+- Completed all four 10-epoch MMSP seed-42 preliminary runs. Raw test MAE/RMSE were:
+  Power `0.075665/0.149140`, Power+future-NWP `0.044636/0.090641`, Full
+  `0.043487/0.090302`, and Full zero-shot `0.053094/0.100733`.
+- The zero-shot registry records training sites `10|11|12|13|14|15|16|17|18|19` and unseen
+  test sites `0|1|2|3|4|5|6|7|8|9`. Its NWP scaler fit range remains
+  `2021-01-02 00:00:00..2021-11-18 23:00:00`, with training-site coordinates only.
+- These are single-seed preliminary results (`valid_or_debug`), not final aggregate evidence.
+
 ## pipeline_v1_fixed — 2026-07-30
 
 - Added target-time-based chronological window assignment so train, validation, and test target
