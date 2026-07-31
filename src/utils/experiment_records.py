@@ -135,7 +135,8 @@ def append_experiment_registry(registry_path: Path, cfg, metrics: dict, checkpoi
         "ctx_masking_ratio": model.ctx_masking_ratio, "ts_masking_ratio": model.ts_masking_ratio,
         "vq_in_ts": model.vq_in_ts, "vq_in_ctx": model.vq_in_ctx, "vq_in_guide": model.vq_in_guide,
         "data_split_version": "chronological_target_split_v1",
-        "scaler_version": "train_only_fit_v1", "output_dir": cfg.paths.output_dir,
+        "scaler_version": dataset.data_pipeline.get("scaler_version", "train_only_fit_v1"),
+        "output_dir": cfg.paths.output_dir,
         "checkpoint_path": checkpoint_path,
         "prediction_path": str(Path(cfg.paths.output_dir) / "predictions.npy"),
         "target_path": str(Path(cfg.paths.output_dir) / "targets.npy"),
@@ -148,6 +149,22 @@ def append_experiment_registry(registry_path: Path, cfg, metrics: dict, checkpoi
     with registry_path.open("a", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writerow(row)
+
+
+def missing_modality_interpretation(model, evaluation_mode: str) -> str:
+    """Describe missing-modality evidence according to how the source model was trained."""
+    if evaluation_mode == "full_modalities":
+        return ""
+    trained_with_modality_dropout = any(
+        float(model.get(name, 0.0)) > 0
+        for name in ("satellite_modality_dropout", "nwp_modality_dropout")
+    )
+    if trained_with_modality_dropout:
+        return "Source run trained with whole-modality dropout; this is a robustness evaluation. "
+    return (
+        "Source run did not train whole-modality missing tokens; "
+        "diagnostic only, not robustness evidence. "
+    )
 
 
 def append_checkpoint_evaluation(
@@ -177,17 +194,15 @@ def append_checkpoint_evaluation(
         "modalities": modalities, "missing_modality_setting": evaluation_mode,
         "ctx_masking_ratio": model.ctx_masking_ratio, "ts_masking_ratio": model.ts_masking_ratio,
         "vq_in_ts": model.vq_in_ts, "vq_in_ctx": model.vq_in_ctx, "vq_in_guide": model.vq_in_guide,
-        "data_split_version": "chronological_target_split_v1", "scaler_version": "train_only_fit_v1",
+        "data_split_version": "chronological_target_split_v1",
+        "scaler_version": dataset.data_pipeline.get("scaler_version", "train_only_fit_v1"),
         "output_dir": str(Path(output_dir).resolve()), "checkpoint_path": str(Path(checkpoint_path).resolve()),
         "prediction_path": str(Path(output_dir).resolve() / "predictions_raw.npy"),
         "target_path": str(Path(output_dir).resolve() / "targets.npy"),
         "mae": metrics["mae"], "rmse": metrics["rmse"], "mape": metrics["mape"],
         "notes": (
             "Checkpoint-only sensitivity evaluation; raw registry metrics. "
-            + (
-                "Source run did not train whole-modality missing tokens; diagnostic only, not robustness evidence. "
-                if evaluation_mode != "full_modalities" else ""
-            )
+            + missing_modality_interpretation(model, evaluation_mode)
             + f"clipped_mae={metrics['clipped_mae']}; clipped_rmse={metrics['clipped_rmse']}"
         ),
         "embedding_extracted": "false",

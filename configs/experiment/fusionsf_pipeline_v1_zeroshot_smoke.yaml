@@ -1,0 +1,18 @@
+# @package _global_
+
+defaults:
+  - fusionsf_pipeline_v1_fixed
+  - override /datamodule: tscontext_3modal_fixed_v1_zeroshot.yaml
+  - _self_
+
+experiment_id: ${now:%Y%m%d_%H%M%S}_fusionsf3m_zeroshot_train${datamodule.dataset.num_ignored_sites}_${datamodule.dataset.num_sites}_testsites${datamodule.dataset.dataset_test.num_sites}_seed${seed}
+
+trainer:
+  max_epochs: 1
+  limit_train_batches: 2
+  limit_val_batches: 2
+  limit_test_batches: 2
+
+datamodule:
+  num_workers: 0
+  pin_memory: false

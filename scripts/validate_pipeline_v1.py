@@ -35,6 +35,15 @@ def main():
     config_dir = str(ROOT / "configs")
     with initialize_config_dir(config_dir=config_dir, version_base="1.2"):
         cfg = compose(config_name="train.yaml", overrides=["experiment=fusionsf_pipeline_v1_smoke"])
+        cross_site_cfg = compose(
+            config_name="train.yaml",
+            overrides=[
+                "experiment=fusionsf_pipeline_v1_zeroshot_smoke",
+                "datamodule.dataset.num_sites=3",
+                "datamodule.dataset.num_ignored_sites=1",
+                "datamodule.dataset.dataset_test.num_sites=1",
+            ],
+        )
     datamodule = hydra.utils.instantiate(cfg.datamodule)
     datamodule.setup()
     split_sizes = {
@@ -66,6 +75,19 @@ def main():
         modality_mode="power", data_pipeline={"version": "legacy_v0"},
     )
     legacy_sample = legacy_dataset[0]
+    cross_site_datamodule = hydra.utils.instantiate(cross_site_cfg.datamodule)
+    cross_site_datamodule.setup()
+    train_sites = {int(site["site"]) for site in cross_site_datamodule.data_all.data_sp}
+    test_sites = {int(site["site"]) for site in cross_site_datamodule.data_test_all.data_sp}
+    if not train_sites.isdisjoint(test_sites):
+        raise AssertionError(f"cross-site validation has overlapping sites: {train_sites & test_sites}")
+    cross_site_batch = next(iter(cross_site_datamodule.test_dataloader()))
+    injected_state = cross_site_datamodule.data_test_all.scaler_state
+    if injected_state.get("source") != "external_training_dataset":
+        raise AssertionError("cross-site dataset did not mark its scaler as externally injected")
+    for modality in ("satellite", "nwp"):
+        if injected_state[modality].get("source") != "external_training_dataset":
+            raise AssertionError(f"cross-site {modality} scaler was not injected")
     summary = {
         "split_sizes": split_sizes,
         "scaler_fit_end_exclusive": datamodule.data_all.scaler_state["fit_end_exclusive"],
@@ -77,6 +99,15 @@ def main():
         "legacy_pipeline_selectable": (
             legacy_dataset.pipeline_version == "legacy_v0" and legacy_sample["ts_input"].shape == (24, 1)
         ),
+        "cross_site": {
+            "train_sites": sorted(train_sites),
+            "test_sites": sorted(test_sites),
+            "test_windows": len(cross_site_datamodule.data_test),
+            "batch_ts_shape": list(cross_site_batch["ts_input"].shape),
+            "batch_nwp_shape": list(cross_site_batch["ec_input"].shape),
+            "scaler_source": injected_state["source"],
+            "nwp_fit_coordinates": cross_site_datamodule.data_all.scaler_state["nwp"]["fit_coordinates"],
+        },
     }
     print(json.dumps(summary, indent=2))
     return 0

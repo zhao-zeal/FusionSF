@@ -1,3 +1,4 @@
+import copy
 import json
 from typing import Dict, List, Tuple, Union
 
@@ -73,7 +74,8 @@ def get_data_spower(data_dir, solar_power_file, num_sites=10, num_ignored_sites=
 
 
 def get_data_satellite(
-    data_dir, satellite_dir, norm_stl=True, num_feature=1, fit_end_time=None, return_scaler=False
+    data_dir, satellite_dir, norm_stl=True, num_feature=1, fit_end_time=None,
+    return_scaler=False, external_scaler_state=None,
 ):
     """
     Parameters
@@ -88,21 +90,35 @@ def get_data_satellite(
     T, H, W, C = array_satellite.shape
     scaler_state = None
     if norm_stl:
-        scaler = StandardScaler()
         flattened = array_satellite.reshape(T, -1)
-        if fit_end_time is None:
+        if external_scaler_state is not None:
+            mean = np.asarray(external_scaler_state["mean"])
+            scale = np.asarray(external_scaler_state["scale"])
+            if mean.shape != (flattened.shape[1],) or scale.shape != mean.shape:
+                raise ValueError("external satellite scaler shape does not match satellite features")
+            if np.any(scale == 0):
+                raise ValueError("external satellite scaler contains a zero scale")
+            array_satellite = ((flattened - mean) / scale).reshape(T, H, W, C)
+            scaler_state = copy.deepcopy(external_scaler_state)
+            scaler_state["source"] = "external_training_dataset"
+        elif fit_end_time is None:
+            scaler = StandardScaler()
             fit_values = flattened
             fit_range = "full_dataset_legacy"
+            scaler.fit(fit_values)
+            array_satellite = scaler.transform(flattened).reshape(T, H, W, C)
+            scaler_state = {"mean": scaler.mean_, "scale": scaler.scale_, "fit_range": fit_range}
         else:
+            scaler = StandardScaler()
             satellite_times = pd.to_datetime(np.load(os.path.join(data_dir, satellite_dir, 'satellite_times.npy')))
             fit_mask = satellite_times < pd.Timestamp(fit_end_time)
             if not fit_mask.any():
                 raise ValueError("no satellite samples fall inside the training scaler range")
             fit_values = flattened[fit_mask]
             fit_range = f"{satellite_times[fit_mask].min()}..{satellite_times[fit_mask].max()}"
-        scaler.fit(fit_values)
-        array_satellite = scaler.transform(flattened).reshape(T, H, W, C)
-        scaler_state = {"mean": scaler.mean_, "scale": scaler.scale_, "fit_range": fit_range}
+            scaler.fit(fit_values)
+            array_satellite = scaler.transform(flattened).reshape(T, H, W, C)
+            scaler_state = {"mean": scaler.mean_, "scale": scaler.scale_, "fit_range": fit_range}
     data_satellite = torch.from_numpy(array_satellite)
     data_satellite_coords = torch.from_numpy(
         np.load(os.path.join(data_dir, satellite_dir, 'satellite_coords.npy')))
@@ -111,7 +127,10 @@ def get_data_satellite(
     return result + (scaler_state,) if return_scaler else result
 
 
-def get_data_nwp(data_dir, nwp_file, norm_nwp=True, fit_end_time=None, return_scaler=False):
+def get_data_nwp(
+    data_dir, nwp_file, norm_nwp=True, fit_end_time=None, return_scaler=False,
+    fit_coordinates=None, external_scaler_state=None,
+):
     """
     Parameters
     -----------
@@ -126,7 +145,8 @@ def get_data_nwp(data_dir, nwp_file, norm_nwp=True, fit_end_time=None, return_sc
     value_columns = df.columns.drop(['fcst_date', 'lat', 'lon'])
     # fixed_v1 interpolates independently within each grid point. The legacy call keeps
     # the original whole-frame interpolation behavior for exact reproducibility.
-    if fit_end_time is None:
+    fixed_processing = fit_end_time is not None or external_scaler_state is not None
+    if not fixed_processing:
         df = df.interpolate()
     else:
         df = df.sort_values(['lat', 'lon', 'fcst_date'])
@@ -143,15 +163,39 @@ def get_data_nwp(data_dir, nwp_file, norm_nwp=True, fit_end_time=None, return_sc
     columns = df.columns.drop(['lat', 'lon'])
     scaler_state = None
     if norm_nwp:
-        scaler = StandardScaler()
-        fit_mask = np.ones(len(df), dtype=bool) if fit_end_time is None else times < pd.Timestamp(fit_end_time)
-        scaler.fit(df.loc[fit_mask, columns])
-        df.loc[:, columns] = scaler.transform(df[columns])
-        scaler_state = {
-            "mean": scaler.mean_, "scale": scaler.scale_,
-            "fit_range": "full_dataset_legacy" if fit_end_time is None else f"{times[fit_mask].min()}..{times[fit_mask].max()}",
-        }
-    if fit_end_time is None:
+        if external_scaler_state is not None:
+            expected_features = list(external_scaler_state.get("feature_names", columns.tolist()))
+            if expected_features != columns.tolist():
+                raise ValueError("external NWP scaler feature order does not match test NWP data")
+            mean = np.asarray(external_scaler_state["mean"])
+            scale = np.asarray(external_scaler_state["scale"])
+            if mean.shape != (len(columns),) or scale.shape != mean.shape:
+                raise ValueError("external NWP scaler shape does not match NWP features")
+            if np.any(scale == 0):
+                raise ValueError("external NWP scaler contains a zero scale")
+            df.loc[:, columns] = (df[columns].to_numpy() - mean) / scale
+            scaler_state = copy.deepcopy(external_scaler_state)
+            scaler_state["source"] = "external_training_dataset"
+        else:
+            scaler = StandardScaler()
+            fit_mask = np.ones(len(df), dtype=bool) if fit_end_time is None else times < pd.Timestamp(fit_end_time)
+            if fit_coordinates is not None:
+                allowed = {(round(float(lat), 1), round(float(lon), 1)) for lat, lon in fit_coordinates}
+                coordinate_mask = np.array([
+                    (lat, lon) in allowed for lat, lon in zip(df["lat"], df["lon"])
+                ])
+                fit_mask &= coordinate_mask
+            if not fit_mask.any():
+                raise ValueError("no NWP samples fall inside the training-site scaler range")
+            scaler.fit(df.loc[fit_mask, columns])
+            df.loc[:, columns] = scaler.transform(df[columns])
+            scaler_state = {
+                "mean": scaler.mean_, "scale": scaler.scale_,
+                "feature_names": columns.tolist(),
+                "fit_range": "full_dataset_legacy" if fit_end_time is None else f"{times[fit_mask].min()}..{times[fit_mask].max()}",
+                "fit_coordinates": sorted(allowed) if fit_coordinates is not None else "all_coordinates",
+            }
+    if not fixed_processing:
         # Exact legacy representation includes the two grouping coordinates as guide channels.
         data_nwp_grouped = df.groupby(['lat', 'lon'])
     else:
@@ -180,6 +224,7 @@ class Ts3MDataset(Dataset):
         valid_ratio: float = 0.2,
         test_ratio: float = 0.2,
         stride: int = 1,
+        precomputed_scaler_state: dict = None,
         **kwargs
 
     ) -> None:
@@ -214,6 +259,8 @@ class Ts3MDataset(Dataset):
         self.pipeline_version = self.data_pipeline.get("version", "legacy_v0")
         if self.pipeline_version not in {"legacy_v0", "fixed_v1"}:
             raise ValueError("data_pipeline.version must be legacy_v0 or fixed_v1")
+        if precomputed_scaler_state is not None and self.pipeline_version != "fixed_v1":
+            raise ValueError("precomputed scalers are supported only by fixed_v1")
 
         self.n_samples = []
         self.year_mapping = {}
@@ -231,7 +278,7 @@ class Ts3MDataset(Dataset):
                             strict=self.pipeline_version == "fixed_v1"))
 
         self.window_records = None
-        self.scaler_state = {}
+        self.scaler_state = copy.deepcopy(precomputed_scaler_state or {})
         fit_end_time = None
         if self.pipeline_version == "fixed_v1":
             self.window_records = build_target_time_windows(
@@ -243,10 +290,26 @@ class Ts3MDataset(Dataset):
             )["train"][1]
             self.scaler_state["fit_end_exclusive"] = str(fit_end_time)
 
+        if precomputed_scaler_state is not None:
+            required_scalers = []
+            if self.use_satellite:
+                required_scalers.append("satellite")
+            if self.use_nwp:
+                required_scalers.append("nwp")
+            missing = [name for name in required_scalers if name not in precomputed_scaler_state]
+            if missing:
+                raise ValueError(f"precomputed scaler state is missing: {missing}")
+            self.scaler_state["source"] = "external_training_dataset"
+
+        training_coordinates = [
+            tuple(float(value) for value in site["lats_lons"].tolist()) for site in self.data_sp
+        ]
+
         if self.use_satellite:
             satellite_result = get_data_satellite(
                 data_dir=data_dir, satellite_dir=satellite_dir, norm_stl=norm_stl,
-                fit_end_time=fit_end_time, return_scaler=self.pipeline_version == "fixed_v1"
+                fit_end_time=fit_end_time, return_scaler=self.pipeline_version == "fixed_v1",
+                external_scaler_state=(precomputed_scaler_state or {}).get("satellite"),
             )
             self.data_stl, self.data_stl_times, self.data_stl_coords = satellite_result[:3]
             if len(satellite_result) == 4:
@@ -257,7 +320,9 @@ class Ts3MDataset(Dataset):
         if self.use_nwp:
             nwp_result = get_data_nwp(
                 data_dir=data_dir, nwp_file='nwp/nwp.csv', norm_nwp=norm_nwp,
-                fit_end_time=fit_end_time, return_scaler=self.pipeline_version == "fixed_v1"
+                fit_end_time=fit_end_time, return_scaler=self.pipeline_version == "fixed_v1",
+                fit_coordinates=training_coordinates,
+                external_scaler_state=(precomputed_scaler_state or {}).get("nwp"),
             )
             self.data_ec_grouped, self.ec_start_time = nwp_result[:2]
             if len(nwp_result) == 3:

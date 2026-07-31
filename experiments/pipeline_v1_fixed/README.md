@@ -19,8 +19,9 @@ No full experiment has been run yet. Validation remains intentionally limited to
   saved. nMAE/nRMSE remain empty until authoritative station capacities are supplied.
 - Negative power is preserved because no authoritative clipping policy is available. fixed_v1
   raises on missing power instead of silently converting missing values to zero.
-- fixed_v1 cross-site `dataset_test` is deliberately blocked until the training-site scaler can be
-  injected into the unseen-site dataset, preventing accidental fitting on test sites.
+- fixed_v1 cross-site `dataset_test` fits NWP scalers only on training-site coordinates and the
+  training time range, then injects those frozen parameters into unseen-site evaluation data.
+  Training and test site IDs are asserted disjoint.
 
 ## Validation and training
 

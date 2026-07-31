@@ -14,12 +14,20 @@ def test_nwp_scaler_fits_training_times_only_and_interpolates_per_grid(tmp_path)
             rows.append({"fcst_date": timestamp, "lat": lat, "lon": 3.0, "feature": value})
     pd.DataFrame(rows).to_csv(nwp_dir / "nwp.csv", index=False)
     grouped, _, state = get_data_nwp(
-        tmp_path, "nwp/nwp.csv", fit_end_time=times[3], return_scaler=True
+        tmp_path, "nwp/nwp.csv", fit_end_time=times[3], return_scaler=True,
+        fit_coordinates=[(1.0, 3.0)],
     )
-    # Training mean uses [0,1,2] and [10,11,12], never the held-out 100/200 values.
-    assert np.isclose(state["mean"][0], 6.0)
+    # The scaler sees only the selected training grid and training times: [0, 1, 2].
+    assert np.isclose(state["mean"][0], 1.0)
+    assert state["fit_coordinates"] == [(1.0, 3.0)]
     first_grid = grouped.get_group((1.0, 3.0))["feature"].to_numpy()
     assert np.isfinite(first_grid).all()
+
+    _, _, injected = get_data_nwp(
+        tmp_path, "nwp/nwp.csv", return_scaler=True, external_scaler_state=state
+    )
+    assert np.array_equal(injected["mean"], state["mean"])
+    assert injected["source"] == "external_training_dataset"
 
 
 def test_satellite_scaler_excludes_held_out_time(tmp_path):
@@ -34,3 +42,9 @@ def test_satellite_scaler_excludes_held_out_time(tmp_path):
         tmp_path, "satellite", fit_end_time=times[3], return_scaler=True
     )
     assert np.isclose(state["mean"][0], 1.0)
+
+    transformed, _, _, injected = get_data_satellite(
+        tmp_path, "satellite", return_scaler=True, external_scaler_state=state
+    )
+    assert np.isclose(transformed[0, 0, 0, 0], -1.224744871391589)
+    assert injected["source"] == "external_training_dataset"

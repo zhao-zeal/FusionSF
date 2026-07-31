@@ -1,5 +1,6 @@
 from typing import Any, Dict, Optional
 import numpy as np
+from omegaconf import OmegaConf
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset, Subset
 
@@ -61,10 +62,32 @@ class Ts3MDataModule(LightningDataModule):
                 self.data_val = Subset(data_all, np.flatnonzero(split_ids == 1))
                 self.data_test = Subset(data_all, np.flatnonzero(split_ids == 2))
                 if self.hparams.dataset.get('dataset_test'):
-                    raise NotImplementedError(
-                        "fixed_v1 cross-site dataset_test needs an explicitly shared training scaler; "
-                        "it is intentionally blocked to prevent silent leakage"
+                    test_config = OmegaConf.to_container(
+                        self.hparams.dataset.dataset_test, resolve=True
                     )
+                    test_config.setdefault(
+                        "data_pipeline",
+                        OmegaConf.to_container(self.hparams.dataset.data_pipeline, resolve=True),
+                    )
+                    test_config.setdefault("modality_mode", self.hparams.dataset.modality_mode)
+                    data_all_test = Ts3MDataset(
+                        **test_config,
+                        train_ratio=train_ratio,
+                        valid_ratio=valid_ratio,
+                        test_ratio=test_ratio,
+                        precomputed_scaler_state=data_all.scaler_state,
+                    )
+                    train_site_ids = {int(site["site"]) for site in data_all.data_sp}
+                    test_site_ids = {int(site["site"]) for site in data_all_test.data_sp}
+                    overlap = train_site_ids.intersection(test_site_ids)
+                    if overlap:
+                        raise ValueError(f"fixed_v1 cross-site datasets overlap at sites: {sorted(overlap)}")
+                    test_split_ids = np.array([
+                        {"train": 0, "validation": 1, "test": 2}[record.split]
+                        for _ in data_all_test.data_sp for record in data_all_test.window_records
+                    ])
+                    self.data_test_all = data_all_test
+                    self.data_test = Subset(data_all_test, np.flatnonzero(test_split_ids == 2))
                 return
             data_len = len(data_all)
             all_indices = np.arange(0, int(data_len))
