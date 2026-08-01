@@ -1,10 +1,16 @@
-# Stage 2 smoke experiment record
+# Stage 2 prototype smoke experiment record
+
+> **Superseded architecture notice:** these two runs used
+> `model_family=prototype_horizon_gru`, `architecture_version=prototype_horizon_gru_v1`.
+> They validate only the migrated data pipeline and must not be cited as FusionSF
+> model results. The aligned formal architecture is recorded in
+> [`STAGE2A_PROTOCOL_RECORD.md`](STAGE2A_PROTOCOL_RECORD.md).
 
 Date: 2026-08-01
 
 Status: completed smoke only; awaiting review
 
-Code commit containing the executed implementation: `913a9fa`
+Code commit containing the executed prototype implementation: `913a9fa`
 
 Execution provenance: the runs were executed from the corresponding dirty working tree,
 then the same implementation was committed as `913a9fa`.

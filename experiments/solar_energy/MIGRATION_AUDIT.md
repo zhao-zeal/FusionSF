@@ -105,13 +105,13 @@ only on rows before the 60% train boundary; no backward fill, interpolation, rep
 horizon, or random split is used. Power mode never indexes NWP. Power+NWP indexes
 exactly `[forecast_start, forecast_end]`.
 
-## Model/embedding contract reserved for stage three
+## Model status correction and formal contract
 
-`FusionSFSolar` is independent from `FusionSF3M`. Its TS embedding is the final GRU
-history state `[B,D]`. Horizon queries are learned positions `[pred_len,D]` conditioned
-by cross-attention over all history tokens. In Power+NWP, the guide embedding is the
-projection of each future NWP row `[B,pred_len,D]`; the fusion embedding is the
-normalized sum of horizon query, attended history, and guide at the same forecast
-offset `[B,pred_len,D]`. The prediction head maps it to `[B,pred_len,1]`. These
-interfaces are reserved only; no embedding extraction or Chronos-2 fusion is run in
-stage two.
+The first Stage-2 smoke used a GRU prototype, now explicitly named
+`PrototypeHorizonGRU` with `model_family=prototype_horizon_gru`. It is not a FusionSF
+result. The formal `FusionSFSolar` (`fusionsf_solar_v1`) contains no GRU and directly
+reuses the original FusionSF `Transformer` for history tokens and `CrossTransformer`
+for horizon-to-history attention. Its TS embedding is `[B,seq_len,D]`; deterministic
+future-time coordinates condition learned horizon queries; weather is encoded per
+target offset; and the fusion embedding is `[B,pred_len,D]`. No Stage-3 embedding
+extraction or Chronos-2 fusion has been run.
