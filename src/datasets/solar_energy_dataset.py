@@ -280,15 +280,23 @@ class SolarWindowDataset(Dataset):
         self.frame, self.manifest, self.spec, self.scaler = frame, manifest.reset_index(drop=True), spec, scaler
         self.mode = "power_weather" if mode == "power_nwp" else mode
         self._time_features = deterministic_time_features(frame[spec.timestamp_col])
+        self._power = frame[spec.power_col].to_numpy(np.float32)
+        self._weather = (
+            frame[list(spec.weather_cols)].to_numpy(np.float32)
+            if spec.weather_cols else np.empty((len(frame), 0), np.float32)
+        )
+        self._starts = self.manifest["start_index"].to_numpy(np.int64)
+        self._seq_len = int(self.manifest["seq_len"].iloc[0]) if len(self.manifest) else 0
+        self._pred_len = int(self.manifest["pred_len"].iloc[0]) if len(self.manifest) else 0
 
     def __len__(self) -> int:
         return len(self.manifest)
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor | str]:
         row = self.manifest.iloc[index]
-        start, seq_len, pred_len = int(row.start_index), int(row.seq_len), int(row.pred_len)
+        start, seq_len, pred_len = int(self._starts[index]), self._seq_len, self._pred_len
         future_start = start + seq_len
-        power = self.frame[self.spec.power_col].to_numpy(np.float32)
+        power = self._power
         item: dict[str, torch.Tensor | str] = {
             "history_power": torch.from_numpy((((power[start:future_start] - self.scaler.power_mean) / self.scaler.power_std)[:, None]).copy()),
             "history_time_features": torch.from_numpy(self._time_features[start:future_start].copy()),
@@ -298,6 +306,6 @@ class SolarWindowDataset(Dataset):
             "forecast_start_timestamp": str(row.forecast_start_timestamp),
         }
         if self.mode == "power_weather":
-            weather = self.frame[list(self.spec.weather_cols)].to_numpy(np.float32)[future_start:future_start + pred_len]
+            weather = self._weather[future_start:future_start + pred_len]
             item["future_weather"] = torch.from_numpy(((weather - self.scaler.weather_mean) / self.scaler.weather_std).copy())
         return item
