@@ -21,6 +21,8 @@ import pyrootutils
 os.environ['SLURM_JOB_ID'] = '1'
 import torch
 import numpy as np
+import json
+import re
 
 root = pyrootutils.setup_root(
     search_from=__file__,
@@ -130,6 +132,25 @@ def train(cfg: DictConfig) -> Tuple[dict, dict]:
     
     if is_fixed_v1:
         fixed_metrics = save_test_outputs(Path(cfg.paths.output_dir), pl_module.out_dict)
+        early_stopping = next(
+            (callback for callback in callbacks if isinstance(callback, pl.callbacks.EarlyStopping)), None
+        )
+        best_match = re.search(r"epoch(?:_epoch)?=(\d+)", str(ckpt_path))
+        completed_epochs = int(trainer.current_epoch)
+        stopped_early = bool(early_stopping and early_stopping.stopped_epoch > 0)
+        run_summary = {
+            "best_checkpoint": str(ckpt_path),
+            "best_epoch": int(best_match.group(1)) if best_match else None,
+            "epochs_completed": completed_epochs,
+            "stop_reason": "early_stopping" if stopped_early else "max_epochs_reached",
+            "early_stopping_monitor": str(early_stopping.monitor) if early_stopping else None,
+            "early_stopping_patience": int(early_stopping.patience) if early_stopping else None,
+            "early_stopping_wait_count": int(early_stopping.wait_count) if early_stopping else None,
+            "metrics_path": str(Path(cfg.paths.output_dir) / "metrics.json"),
+        }
+        (Path(cfg.paths.output_dir) / "run_summary.json").write_text(
+            json.dumps(run_summary, indent=2) + "\n", encoding="utf-8"
+        )
         append_experiment_registry(
             Path(cfg.paths.root_dir) / "experiments/experiment_registry.csv",
             cfg, fixed_metrics, str(ckpt_path), datamodule,

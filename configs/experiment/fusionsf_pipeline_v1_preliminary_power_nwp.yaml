@@ -4,7 +4,7 @@ defaults:
   - fusionsf_pipeline_v1_preliminary
   - _self_
 
-experiment_id: ${now:%Y%m%d_%H%M%S}_fusionsf_fixedv1_prelim_power_nwp_sites${datamodule.dataset.num_sites}_seed${seed}
+experiment_id: ${now:%Y%m%d_%H%M%S}_fusionsf_fixedv1_clean30_power_nwp_sites${datamodule.dataset.num_sites}_seed${seed}
 task_name: ${experiment_id}
 
 datamodule:
@@ -14,5 +14,3 @@ datamodule:
 pl_module:
   model:
     modality_mode: power_nwp
-    vq_in_ctx: false
-    vq_in_guide: false

@@ -81,6 +81,13 @@ def save_test_outputs(output_dir: Path, out_dict: dict) -> dict:
     for name, value in arrays.items():
         np.save(output_dir / f"{filename_map.get(name, name)}.npy", value)
     raw_prediction = arrays["outputs"]
+    target = arrays["targets"]
+    finite_counts = {
+        "prediction_nan_count": int(np.isnan(raw_prediction).sum()),
+        "prediction_inf_count": int(np.isinf(raw_prediction).sum()),
+        "target_nan_count": int(np.isnan(target).sum()),
+        "target_inf_count": int(np.isinf(target).sum()),
+    }
     clipped_prediction = np.clip(raw_prediction, 0.0, None)
     np.save(output_dir / "predictions_raw.npy", raw_prediction)
     np.save(output_dir / "predictions_clipped.npy", clipped_prediction)
@@ -89,8 +96,13 @@ def save_test_outputs(output_dir: Path, out_dict: dict) -> dict:
     metrics = dict(raw_metrics)
     metrics.update({f"clipped_{key}": value for key, value in clipped_metrics.items()})
     metrics.update({
+        "prediction_mean": float(np.mean(raw_prediction)),
+        "prediction_std": float(np.std(raw_prediction)),
+        "zero_prediction_fraction": float(np.mean(raw_prediction == 0)),
+        "all_zero_forecast_fraction": float(np.mean(np.all(raw_prediction == 0, axis=tuple(range(1, raw_prediction.ndim))))),
         "negative_prediction_fraction": float(np.mean(raw_prediction < 0)),
         "clipped_value_fraction": float(np.mean(raw_prediction != clipped_prediction)),
+        **finite_counts,
     })
     (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
     horizon_frames = []
@@ -99,6 +111,19 @@ def save_test_outputs(output_dir: Path, out_dict: dict) -> dict:
         frame.insert(0, "prediction_variant", variant)
         horizon_frames.append(frame)
     pd.concat(horizon_frames, ignore_index=True).to_csv(output_dir / "metrics_by_horizon.csv", index=False)
+    site_rows = []
+    site_ids = np.asarray(arrays["site_ids"]).reshape(-1)
+    for site_id in sorted(np.unique(site_ids)):
+        selected = site_ids == site_id
+        row = {"site_id": int(site_id), **compute_forecast_metrics(raw_prediction[selected], target[selected])}
+        row.update({
+            "prediction_mean": float(np.mean(raw_prediction[selected])),
+            "prediction_std": float(np.std(raw_prediction[selected])),
+            "zero_prediction_fraction": float(np.mean(raw_prediction[selected] == 0)),
+            "negative_prediction_fraction": float(np.mean(raw_prediction[selected] < 0)),
+        })
+        site_rows.append(row)
+    pd.DataFrame(site_rows).to_csv(output_dir / "metrics_by_site.csv", index=False)
     return metrics
 
 

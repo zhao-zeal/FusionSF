@@ -18,11 +18,22 @@ def test_preliminary_seed42_configs_share_one_budget_and_correct_modalities():
             cfg = compose(config_name="train.yaml", overrides=[f"experiment={experiment}"])
             assert cfg.seed == 42
             assert cfg.experiment_stage == "preliminary_seed42"
-            assert cfg.trainer.max_epochs == 10
+            assert cfg.trainer.max_epochs == 30
             assert cfg.trainer.deterministic is True
+            assert cfg.callbacks.early_stopping.monitor == "val/mae"
+            assert cfg.callbacks.early_stopping.patience == 10
             assert cfg.trainer.get("limit_train_batches", 1.0) == 1.0
             assert cfg.datamodule.dataset.modality_mode == mode
             assert cfg.pl_module.model.modality_mode == mode
+            assert cfg.pl_module.model.masking_policy == "fixed_ratio"
+            assert cfg.pl_module.model.ctx_masking_ratio == 0
+            assert cfg.pl_module.model.ts_masking_ratio == 0
+            assert cfg.pl_module.model.satellite_modality_dropout == 0
+            assert cfg.pl_module.model.nwp_modality_dropout == 0
+            assert cfg.pl_module.model.vq_in_ts is False
+            assert cfg.pl_module.model.vq_in_ctx is False
+            assert cfg.pl_module.model.vq_in_guide is False
+            assert cfg.pl_module.model.output_activation == "identity"
             assert cfg.datamodule.dataset.num_sites == num_sites
             assert cfg.datamodule.dataset.num_ignored_sites == ignored
             assert cfg.datamodule.dataset.data_pipeline.scaler_version == "train_sites_and_time_only_fit_v1"
@@ -30,3 +41,4 @@ def test_preliminary_seed42_configs_share_one_budget_and_correct_modalities():
                 assert cfg.datamodule.dataset.get("dataset_test") is None
             else:
                 assert cfg.datamodule.dataset.dataset_test.num_sites == test_sites
+                assert cfg.datamodule.dataset.dataset_test.num_ignored_sites == 0

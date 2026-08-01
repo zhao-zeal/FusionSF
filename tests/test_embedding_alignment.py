@@ -19,6 +19,11 @@ def test_saved_outputs_and_metadata_remain_row_aligned(tmp_path):
         "forecast_horizons": [np.array([[1, 2], [1, 2], [1, 2]])],
     }
     metrics = save_test_outputs(tmp_path, chunks)
+    assert (tmp_path / "metrics_by_site.csv").is_file()
+    assert metrics["prediction_nan_count"] == 0
+    assert metrics["prediction_inf_count"] == 0
+    assert "prediction_mean" in metrics
+    assert "all_zero_forecast_fraction" in metrics
     assert np.load(tmp_path / "predictions.npy").shape[0] == 3
     assert np.array_equal(np.load(tmp_path / "site_ids.npy"), [2, 3, 4])
     assert np.array_equal(np.load(tmp_path / "timestamps.npy"), [[7, 8], [8, 9], [9, 10]])

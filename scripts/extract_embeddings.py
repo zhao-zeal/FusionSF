@@ -82,6 +82,9 @@ def main():
         raise ValueError("fixed_v1 is required by default; legacy embeddings need a separate marked output")
     datamodule = hydra.utils.instantiate(cfg.datamodule)
     datamodule.setup()
+    training_site_ids = sorted(int(site["site"]) for site in datamodule.data_all.data_sp)
+    extraction_dataset = getattr(datamodule, "data_test_all", None) or datamodule.data_all
+    extraction_site_ids = sorted(int(site["site"]) for site in extraction_dataset.data_sp)
     pl_module = hydra.utils.instantiate(cfg.pl_module)
     checkpoint = torch.load(args.checkpoint_path, map_location="cpu")
     pl_module.load_state_dict(checkpoint["state_dict"], strict=True)
@@ -99,6 +102,9 @@ def main():
         "git_commit": git_commit(),
         "data_pipeline": "fixed_v1",
         "evaluation_mode": args.evaluation_mode,
+        "training_site_ids": training_site_ids,
+        "extraction_site_ids": extraction_site_ids,
+        "site_seen_during_training": args.site_seen_during_training,
     }
     all_metadata = []
     embedding_dim = None
@@ -129,6 +135,8 @@ def main():
                         "pooling_type": "|".join(args.pooling),
                         "checkpoint_path": str(args.checkpoint_path.resolve()),
                         "git_commit": common_metadata["git_commit"],
+                        "training_site_ids": "|".join(map(str, training_site_ids)),
+                        "extraction_site_ids": "|".join(map(str, extraction_site_ids)),
                         "site_seen_during_training": args.site_seen_during_training,
                     })
         split_dir = args.output_dir / "embeddings" / split
