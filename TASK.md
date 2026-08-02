@@ -8,6 +8,8 @@ Last updated: 2026-08-02
 
 ## Completed / reviewed
 
+- `mmsp_fusion_embedding_to_chronos2`: completed frozen inference on 25,450 windows from unseen MMSP sites 0–9 after user confirmation that MMSP future NWP is available at forecast origin. Formal fusion-node sensitivity to both NWP and satellite passed, but Fusion aligned underperformed baseline and TS and exactly matched shuffled Fusion predictions in Chronos-2. The negative result is retained in the solar-energy artifacts.
+
 - `mmsp_embedding_to_chronos2`: blocked at Stage 3B preflight because MMSP NWP
   provides valid time but no issue/publication time or forecast cycle. No model
   inference or new embedding export was run; see the solar-energy audit.
@@ -17,7 +19,7 @@ Last updated: 2026-08-02
 
 ## Planned
 
-- Complete Fusion embedding cannot resume without NWP availability provenance.
+- No Fusion method change is planned; the completed negative result is retained without tuning.
 
 ## Boundaries
 
