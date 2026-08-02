@@ -690,6 +690,29 @@ class FusionSF3M(nn.Module):
             return embedding[:, -1]
         raise ValueError("pooling must be none, mean, or last")
 
+    def extract_ts_embeddings(
+        self, ts: torch.Tensor, time_coords: torch.Tensor, pooling: str = "none"
+    ) -> torch.Tensor:
+        """Extract the historical-power representation without evaluating other modalities.
+
+        This is a read-only inference interface over the existing TS path used by
+        :meth:`forward`: cyclical time encoding, TS input projection, and the
+        checkpoint's TS Transformer.  It intentionally does not accept satellite,
+        NWP, target, or future-time tensors.
+        """
+        if ts.ndim != 3:
+            raise ValueError("ts must have shape [B, T, C]")
+        if time_coords.ndim != 5:
+            raise ValueError("time_coords must have shape [B, T, C, H, W]")
+        if ts.shape[0] != time_coords.shape[0] or ts.shape[1] != time_coords.shape[1]:
+            raise ValueError("ts and time_coords batch/time dimensions must match")
+        encoded_time = self.time_coords_encoder(time_coords)
+        embedded = self.ts_embedding(
+            torch.cat([ts, encoded_time[..., 0, 0]], dim=-1)
+        )
+        latent = self.ts_encoder(embedded)
+        return self._pool_embedding(latent, pooling)
+
     def extract_embeddings(
         self, batch: dict, embedding_type: str = "both", pooling: str = "none",
         evaluation_mode: str = "full_modalities",
