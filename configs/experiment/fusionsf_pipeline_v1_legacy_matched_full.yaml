@@ -1,0 +1,69 @@
+# @package _global_
+
+# fixed_v1 data/evaluation pipeline with the legacy full-modal experiment's
+# model and optimization settings. Differences from the legacy run are limited
+# to fixed_v1 correctness changes (split/scaler/NWP columns/non-dead output
+# activation and structured artifact recording). Legacy masking semantics are
+# retained so that masking is not an additional experimental variable.
+defaults:
+  - fusionsf_pipeline_v1_fixed
+  - _self_
+
+experiment_id: ${now:%Y%m%d_%H%M%S}_fusionsf_fixedv1_legacy_matched_full_seed${seed}
+task_name: ${experiment_id}
+seed: 42
+
+trainer:
+  max_epochs: 100
+  deterministic: true
+  strategy: ddp
+
+datamodule:
+  dataset:
+    num_sites: 10
+    num_ignored_sites: 0
+  batch_size: 16
+  test_batch_size: 64
+  num_workers: 4
+  pin_memory: true
+
+pl_module:
+  criterion:
+    _target_: torch.nn.L1Loss
+  model:
+    modality_mode: all
+    patch_size: [8, 8]
+    image_size: [64, 64]
+    ctx_channels: 1
+    ts_channels: 1
+    guide_channels: 15
+    pe_type: rope
+    use_glu: true
+    freq_type: lucidrains
+    max_freq: 128
+    use_self_attention: true
+    ctx_masking_ratio: 0.99
+    ts_masking_ratio: 0.0
+    masking_policy: legacy_random_ratio
+    dim: 64
+    depth: 12
+    heads: 8
+    mlp_ratio: 4
+    dim_head: 64
+    dropout: 0.4
+    num_mlp_heads: 1
+    decoder_dim: 128
+    decoder_depth: 4
+    decoder_heads: 6
+    decoder_dim_head: 128
+    vq_in_ts: true
+    vq_in_ctx: true
+    vq_in_guide: false
+    output_activation: identity
+
+callbacks:
+  model_checkpoint:
+    monitor: val/mae
+  early_stopping:
+    monitor: val/mae
+    patience: 20

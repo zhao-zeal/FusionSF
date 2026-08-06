@@ -1,0 +1,4 @@
+bash scripts/run_night02_legacy_vq_all_off.sh 2
+bash scripts/run_night01_legacy_full_repro.sh 2
+bash scripts/run_night03a_fixedv1_vq_all_off.sh 2
+bash scripts/run_night03b_fixedv1_vq_paper_best.sh 2
