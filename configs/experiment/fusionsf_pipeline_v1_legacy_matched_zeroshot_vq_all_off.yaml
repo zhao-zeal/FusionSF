@@ -1,0 +1,14 @@
+# @package _global_
+
+defaults:
+  - fusionsf_pipeline_v1_legacy_matched_zeroshot
+  - _self_
+
+experiment_id: ${now:%Y%m%d_%H%M%S}_fusionsf_fixedv1_legacy_matched_zeroshot_vq_all_off_seed${seed}
+task_name: ${experiment_id}
+
+pl_module:
+  model:
+    vq_in_ts: false
+    vq_in_ctx: false
+    vq_in_guide: false

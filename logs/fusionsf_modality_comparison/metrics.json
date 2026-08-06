@@ -1,0 +1,48 @@
+{
+  "targets_identical": true,
+  "num_sites": 10,
+  "windows_per_site": 2558,
+  "directories": {
+    "Power": "/home/zhaopp/workspace/FusionSF/logs/fusionSF_power_optimized_train10_test10/runs/1/src.models.fusionSF_3modal.FusionSF3M",
+    "Power + NWP": "/home/zhaopp/workspace/FusionSF/logs/fusionSF_power_nwp_optimized_train10_test10/runs/1/src.models.fusionSF_3modal.FusionSF3M",
+    "All modalities": "/home/zhaopp/workspace/FusionSF/logs/fusionSF_train10_test10/runs/1/src.models.fusionSF_3modal.FusionSF3M"
+  },
+  "global_metrics": [
+    {
+      "model": "Power",
+      "mae": 0.1787382870512667,
+      "rmse": 0.3044931048326546,
+      "mse": 0.09271605089063,
+      "windows": 25580,
+      "prediction_length": 24,
+      "values": 613920,
+      "mae_change_vs_all_pct": 341.1132166402011,
+      "rmse_change_vs_all_pct": 254.8501460423074,
+      "mse_change_vs_all_pct": 1159.1862614624686
+    },
+    {
+      "model": "Power + NWP",
+      "mae": 0.1787382870512667,
+      "rmse": 0.3044931048326546,
+      "mse": 0.09271605089063,
+      "windows": 25580,
+      "prediction_length": 24,
+      "values": 613920,
+      "mae_change_vs_all_pct": 341.1132166402011,
+      "rmse_change_vs_all_pct": 254.8501460423074,
+      "mse_change_vs_all_pct": 1159.1862614624686
+    },
+    {
+      "model": "All modalities",
+      "mae": 0.04051982128593907,
+      "rmse": 0.08580892757934813,
+      "mse": 0.007363172052317813,
+      "windows": 25580,
+      "prediction_length": 24,
+      "values": 613920,
+      "mae_change_vs_all_pct": 0.0,
+      "rmse_change_vs_all_pct": 0.0,
+      "mse_change_vs_all_pct": 0.0
+    }
+  ]
+}

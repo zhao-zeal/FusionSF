@@ -1,5 +1,6 @@
 import torch
 import wandb
+import copy
 from torchmetrics import MeanMetric
 
 from . import ContextMixerModule
@@ -19,7 +20,16 @@ class Pl3Modal(ContextMixerModule):
 
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric()
-        self.out_dict = {'inputs': [], 'outputs': [], 'targets': []}
+        self.test_loss = MeanMetric()
+        self.evaluation_mode = kwargs.get("evaluation_mode", "full_modalities")
+        for key in self.hparams.metrics.val:
+            setattr(self, f"test_{key}", copy.deepcopy(self.hparams.metrics.val[key]))
+        self.out_dict = {
+            'inputs': [], 'outputs': [], 'targets': [], 'site_ids': [],
+            'input_start_timestamps': [], 'input_end_timestamps': [],
+            'forecast_start_timestamps': [], 'forecast_end_timestamps': [],
+            'forecast_timestamps': [], 'forecast_horizons': [],
+        }
 
     def forward(self, batch, mask=True):
         (
@@ -34,7 +44,9 @@ class Pl3Modal(ContextMixerModule):
         ) = self.prepare_batch(batch)
 
         out = self.model(
-            x_ctx, ctx_coords, x_ts, ts_coords, time_coords, x_ec, mask
+            x_ctx, ctx_coords, x_ts, ts_coords, time_coords, x_ec, mask,
+            modality_availability=batch.get('modality_availability'),
+            evaluation_mode=self.evaluation_mode,
         )
         return out, y_ts, y_prev_ts, x_ts
 
@@ -123,12 +135,25 @@ class Pl3Modal(ContextMixerModule):
         self.out_dict['inputs'] += [x_ts.cpu().detach().numpy()]
         self.out_dict['outputs'] += [y_hat.cpu().detach().numpy()]
         self.out_dict['targets'] += [y_ts.cpu().detach().numpy()]
+        metadata_mapping = {
+            'site_ids': 'site_id',
+            'input_start_timestamps': 'input_start_timestamp',
+            'input_end_timestamps': 'input_end_timestamp',
+            'forecast_start_timestamps': 'forecast_start_timestamp',
+            'forecast_end_timestamps': 'forecast_end_timestamp',
+            'forecast_timestamps': 'forecast_timestamps',
+        }
+        for output_key, batch_key in metadata_mapping.items():
+            self.out_dict[output_key].append(val_batch[batch_key].cpu().detach().numpy())
+        self.out_dict['forecast_horizons'].append(
+            torch.arange(1, y_ts.shape[1] + 1).repeat(y_ts.shape[0], 1).numpy()
+        )
 
-        self.val_loss(loss)
-        self.log("test/loss", self.val_loss, on_step=True, prog_bar=True)
+        self.test_loss(loss)
+        self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
 
         for key in self.hparams.metrics.val:
-            metric = getattr(self, f"val_{key}")
+            metric = getattr(self, f"test_{key}")
             if hasattr(metric, "needs_previous") and metric.needs_previous:
                 metric(y_hat, y_ts, y_prev_ts)
             else:

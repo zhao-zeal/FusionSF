@@ -1,0 +1,14 @@
+# @package _global_
+
+defaults:
+  - fusionsf_pipeline_v1_fixed
+  - _self_
+
+experiment_id: ${now:%Y%m%d_%H%M%S}_fusionsf3m_moddrop_sites${datamodule.dataset.num_sites}_seq${datamodule.dataset.seq_len}_pred${datamodule.dataset.pred_len}_seed${seed}
+
+pl_module:
+  model:
+    # Independent per-sample dropout: expected mix is 64% full, 16% satellite-only missing,
+    # 16% NWP-only missing, and 4% both missing.
+    satellite_modality_dropout: 0.2
+    nwp_modality_dropout: 0.2

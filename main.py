@@ -1,8 +1,28 @@
-import pyrootutils
 import os
+import sys
+import site
+
+# A broken user-site package must not shadow the pinned training environment.
+user_site = site.getusersitepackages()
+if user_site in sys.path:
+    sys.path.remove(user_site)
+
+# setuptools 81+ no longer installs pkg_resources, while Lightning 1.8 still
+# imports it. Reuse pip's vendored copy so the original dependency versions can
+# run without downgrading setuptools.
+try:
+    import pkg_resources  # noqa: F401
+except ModuleNotFoundError:
+    from pip._vendor import pkg_resources
+
+    sys.modules["pkg_resources"] = pkg_resources
+
+import pyrootutils
 os.environ['SLURM_JOB_ID'] = '1'
 import torch
 import numpy as np
+import json
+import re
 
 root = pyrootutils.setup_root(
     search_from=__file__,
@@ -22,6 +42,9 @@ from pytorch_lightning.loggers import LightningLoggerBase
 # from src.datamodules.tscontext_3modal_datamodule import Ts3MDataModule
 
 from src import utils
+from src.utils.experiment_records import (
+    append_experiment_registry, record_run_context, save_scaler_state, save_test_outputs,
+)
 
 log = utils.get_pylogger(__name__)
 
@@ -48,12 +71,12 @@ def train(cfg: DictConfig) -> Tuple[dict, dict]:
     log.info(f"Instantiating model <{cfg.pl_module._target_}>")
     pl_module: LightningModule = hydra.utils.instantiate(cfg.pl_module)
 
-    # test code
+    # Dataset setup is read-only; do not call training_step manually before Trainer.fit.
     datamodule.setup()
-    tensor = datamodule.data_train.__getitem__(0)
-    for k, v in tensor.items():
-        tensor[k] = torch.cat([v.unsqueeze(0)]*7, dim=0)
-    pl_module.training_step(tensor, 0)
+    is_fixed_v1 = cfg.get("experiment_version") == "pipeline_v1_fixed"
+    if is_fixed_v1:
+        record_run_context(Path(cfg.paths.output_dir), cfg)
+        save_scaler_state(Path(cfg.paths.output_dir), datamodule.data_all.scaler_state)
 
     log.info("Instantiating callbacks...")
     callbacks: List[Callback] = utils.instantiate_callbacks(cfg.get("callbacks"))
@@ -107,13 +130,41 @@ def train(cfg: DictConfig) -> Tuple[dict, dict]:
             print('after valid =======================')
             log.info(f"Best ckpt path: {ckpt_path}")
     
-    for k, v in pl_module.out_dict.items():
-        save_dir = os.path.join(logger[0].save_dir, cfg.pl_module.model._target_)
-        if not os.path.exists(save_dir):
-            os.mkdir(save_dir)
-        v = np.concatenate(v, axis=0)
-        print('Save output, shape is: ', v.shape)
-        np.save(os.path.join(save_dir, k + '.npy'), v)
+    if is_fixed_v1:
+        fixed_metrics = save_test_outputs(Path(cfg.paths.output_dir), pl_module.out_dict)
+        early_stopping = next(
+            (callback for callback in callbacks if isinstance(callback, pl.callbacks.EarlyStopping)), None
+        )
+        best_match = re.search(r"epoch(?:_epoch)?=(\d+)", str(ckpt_path))
+        completed_epochs = int(trainer.current_epoch)
+        stopped_early = bool(early_stopping and early_stopping.stopped_epoch > 0)
+        run_summary = {
+            "best_checkpoint": str(ckpt_path),
+            "best_epoch": int(best_match.group(1)) if best_match else None,
+            "epochs_completed": completed_epochs,
+            "stop_reason": "early_stopping" if stopped_early else "max_epochs_reached",
+            "early_stopping_monitor": str(early_stopping.monitor) if early_stopping else None,
+            "early_stopping_patience": int(early_stopping.patience) if early_stopping else None,
+            "early_stopping_wait_count": int(early_stopping.wait_count) if early_stopping else None,
+            "metrics_path": str(Path(cfg.paths.output_dir) / "metrics.json"),
+        }
+        (Path(cfg.paths.output_dir) / "run_summary.json").write_text(
+            json.dumps(run_summary, indent=2) + "\n", encoding="utf-8"
+        )
+        append_experiment_registry(
+            Path(cfg.paths.root_dir) / "experiments/experiment_registry.csv",
+            cfg, fixed_metrics, str(ckpt_path), datamodule,
+        )
+    else:
+        # Preserve the original baseline_v0_legacy artifact layout.
+        for k, v in pl_module.out_dict.items():
+            if not v:
+                continue
+            save_dir = os.path.join(logger[0].save_dir, cfg.pl_module.model._target_)
+            os.makedirs(save_dir, exist_ok=True)
+            v = np.concatenate(v, axis=0)
+            print('Save output, shape is: ', v.shape)
+            np.save(os.path.join(save_dir, k + '.npy'), v)
 
     test_metrics = trainer.callback_metrics
 

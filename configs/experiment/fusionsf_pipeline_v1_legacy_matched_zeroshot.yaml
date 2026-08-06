@@ -1,0 +1,19 @@
+# @package _global_
+
+# Cross-site counterpart of the legacy-matched fixed_v1 experiment:
+# train on MMSP sites 10-19 and evaluate on unseen sites 0-9.
+defaults:
+  - fusionsf_pipeline_v1_legacy_matched_full
+  - override /datamodule: tscontext_3modal_fixed_v1_zeroshot.yaml
+  - _self_
+
+experiment_id: ${now:%Y%m%d_%H%M%S}_fusionsf_fixedv1_legacy_matched_zeroshot_seed${seed}
+task_name: ${experiment_id}
+
+datamodule:
+  dataset:
+    num_sites: 20
+    num_ignored_sites: 10
+    dataset_test:
+      num_sites: 10
+      num_ignored_sites: 0

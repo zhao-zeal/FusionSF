@@ -292,9 +292,21 @@ class FusionSF3M(nn.Module):
         vq_in_ts: bool = False,
         vq_in_ctx: bool = False,
         vq_in_guide: bool = False,
+        modality_mode: str = "all",
+        masking_policy: str = "legacy_random_ratio",
+        output_activation: str = "relu",
+        random_missing_probability: float = 0.5,
+        satellite_modality_dropout: float = 0.0,
+        nwp_modality_dropout: float = 0.0,
         **kwargs,
     ):
         super().__init__()
+        valid_modality_modes = {"power", "power_nwp", "all"}
+        if modality_mode not in valid_modality_modes:
+            raise ValueError(
+                f"modality_mode must be one of {sorted(valid_modality_modes)}, "
+                f"but got {modality_mode!r}"
+            )
         assert (
             ctx_masking_ratio >= 0 and ctx_masking_ratio < 1
         ), "ctx_masking_ratio must be in [0,1)"
@@ -321,6 +333,33 @@ class FusionSF3M(nn.Module):
         self.vq_in_ts = vq_in_ts
         self.vq_in_ctx = vq_in_ctx
         self.vq_in_guide = vq_in_guide
+        self.modality_mode = modality_mode
+        self.use_nwp = modality_mode in {"power_nwp", "all"}
+        self.use_satellite = modality_mode == "all"
+        if masking_policy not in {"legacy_random_ratio", "fixed_ratio"}:
+            raise ValueError("masking_policy must be legacy_random_ratio or fixed_ratio")
+        if output_activation not in {"relu", "identity", "softplus"}:
+            raise ValueError("output_activation must be relu, identity, or softplus")
+        self.masking_policy = masking_policy
+        self.random_missing_probability = random_missing_probability
+        for name, probability in {
+            "satellite_modality_dropout": satellite_modality_dropout,
+            "nwp_modality_dropout": nwp_modality_dropout,
+        }.items():
+            if not 0.0 <= probability <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1]")
+        self.satellite_modality_dropout = satellite_modality_dropout
+        self.nwp_modality_dropout = nwp_modality_dropout
+
+        if vq_in_ctx and not self.use_satellite:
+            raise ValueError("vq_in_ctx requires modality_mode='all'")
+        if vq_in_guide and not self.use_nwp:
+            raise ValueError("vq_in_guide requires NWP to be enabled")
+
+        print(
+            "FusionSF modalities: "
+            f"power=True, nwp={self.use_nwp}, satellite={self.use_satellite}"
+        )
 
         for i in range(2):
             ims = self.image_size[i]
@@ -405,16 +444,17 @@ class FusionSF3M(nn.Module):
             dropout=dropout,
         )
         self.ts_mask_token = nn.Parameter(torch.zeros(1, 1, dim))
+        self.missing_ctx_token = nn.Parameter(torch.zeros(1, 1, dim))
+        self.missing_guide_token = nn.Parameter(torch.zeros(1, 1, dim))
 
         self.mlp_heads = nn.ModuleList([])
         for i in range(num_mlp_heads):
-            self.mlp_heads.append(
-                nn.Sequential(
-                    nn.LayerNorm(decoder_dim),
-                    nn.Linear(decoder_dim, out_dim, bias=True),
-                    nn.ReLU(),
-                )
-            )
+            activation = {
+                "relu": nn.ReLU(), "identity": nn.Identity(), "softplus": nn.Softplus()
+            }[output_activation]
+            self.mlp_heads.append(nn.Sequential(
+                nn.LayerNorm(decoder_dim), nn.Linear(decoder_dim, out_dim, bias=True), activation
+            ))
 
         self.quantile_masker = nn.Sequential(
             nn.Conv1d(decoder_dim, dim, kernel_size=3, padding=1),
@@ -439,6 +479,16 @@ class FusionSF3M(nn.Module):
             print('3 modal model, vq in guide')
             self.guide_vq = ResidualVQ(dim=dim, num_quantizers=8, codebook_size=1024,
                                        shared_codebook=True, kmeans_init=True)
+
+        # Keep the full module layout checkpoint-compatible, but make disabled
+        # ablation branches non-trainable as well as skipping their forward pass.
+        if not self.use_nwp:
+            for module in (self.guide_embedding, self.guide_encoder):
+                module.requires_grad_(False)
+        if not self.use_satellite:
+            for module in (self.to_patch_embedding, self.ctx_encoder, self.mixer):
+                module.requires_grad_(False)
+            self.ctx_mask_token.requires_grad_(False)
 
     def random_masking(self, x, mask_ratio):
         """
@@ -478,6 +528,9 @@ class FusionSF3M(nn.Module):
         time_coords: torch.Tensor,
         ts_guide: torch.Tensor,
         mask: bool = True,
+        modality_availability: torch.Tensor = None,
+        evaluation_mode: str = "full_modalities",
+        return_embeddings: bool = False,
     ):
         """
         Args:
@@ -495,66 +548,119 @@ class FusionSF3M(nn.Module):
 
         B, T, _, H, W = ctx.shape
         time_coords = self.time_coords_encoder(time_coords)
+        valid_modes = {
+            "full_modalities", "missing_satellite", "missing_nwp",
+            "missing_satellite_and_nwp", "random_satellite_missing", "random_nwp_missing",
+        }
+        if evaluation_mode not in valid_modes:
+            raise ValueError(f"unknown evaluation_mode={evaluation_mode!r}")
+        if modality_availability is None:
+            modality_availability = torch.ones(B, 2, device=ctx.device, dtype=ctx.dtype)
+        else:
+            modality_availability = modality_availability.to(device=ctx.device, dtype=ctx.dtype).clone()
+        if evaluation_mode in {"missing_satellite", "missing_satellite_and_nwp"}:
+            modality_availability[:, 0] = 0
+        if evaluation_mode in {"missing_nwp", "missing_satellite_and_nwp"}:
+            modality_availability[:, 1] = 0
+        if evaluation_mode == "random_satellite_missing":
+            modality_availability[:, 0] *= (
+                torch.rand(B, device=ctx.device) >= self.random_missing_probability
+            )
+        if evaluation_mode == "random_nwp_missing":
+            modality_availability[:, 1] *= (
+                torch.rand(B, device=ctx.device) >= self.random_missing_probability
+            )
+        # fixed_v1 robustness training: independently drop complete modalities per sample.
+        # This is active only for training forward passes (mask=True) and therefore cannot
+        # silently alter validation, testing, prediction, or embedding extraction.
+        if self.training and mask:
+            if self.use_satellite and self.satellite_modality_dropout > 0:
+                modality_availability[:, 0] *= (
+                    torch.rand(B, device=ctx.device) >= self.satellite_modality_dropout
+                )
+            if self.use_nwp and self.nwp_modality_dropout > 0:
+                modality_availability[:, 1] *= (
+                    torch.rand(B, device=ctx.device) >= self.nwp_modality_dropout
+                )
 
-        # ctx: to patch and to vq
-        ctx = torch.cat([ctx, time_coords], axis=2)
-        ctx = rearrange(ctx, "b t c h w -> (b t) c h w")
-        ctx = self.to_patch_embedding(ctx)  # BT, N, D = 48,64,64
-        if self.vq_in_ctx:
-            ctx, indices, commit_loss_ctx = self.ctx_vq(ctx)
-            commit_loss += commit_loss_ctx
+        # Satellite is intentionally not encoded in the power-only and
+        # power+NWP ablations. The dataloader stays identical across runs so
+        # that windowing, splits, and targets remain directly comparable.
+        if self.use_satellite:
+            ctx = torch.cat([ctx, time_coords], axis=2)
+            ctx = rearrange(ctx, "b t c h w -> (b t) c h w")
+            ctx = self.to_patch_embedding(ctx)  # BT, N, D = 48,64,64
+            ctx_available = repeat(modality_availability[:, 0], "b -> (b t) 1 1", t=T)
+            ctx = ctx * ctx_available + self.missing_ctx_token.expand_as(ctx) * (1 - ctx_available)
+            if self.vq_in_ctx:
+                ctx, indices, commit_loss_ctx = self.ctx_vq(ctx)
+                commit_loss += commit_loss_ctx
 
         # ts: to vq
         ts = torch.cat([ts, time_coords[..., 0, 0]], axis=-1)
         ts = self.ts_embedding(ts)
+        if self.ts_masking_ratio > 0 and mask:
+            ts_missing = torch.rand(B, T, device=ts.device) < self.ts_masking_ratio
+            ts = torch.where(ts_missing.unsqueeze(-1), self.ts_mask_token.expand_as(ts), ts)
         if self.vq_in_ts:
             ts, indices, commit_loss_ts = self.ts_vq(ts)
             commit_loss += commit_loss_ts
 
-        # ts_guide: to vq
-        ts_guide = self.guide_embedding(ts_guide)
-        if self.vq_in_guide:
-            ts_guide, indices, commit_loss_guide = self.guide_vq(ts_guide)
-            commit_loss += commit_loss_guide
+        # NWP guide is only encoded for modes that explicitly enable it.
+        if self.use_nwp:
+            ts_guide = self.guide_embedding(ts_guide)
+            guide_available = modality_availability[:, 1].view(B, 1, 1)
+            ts_guide = ts_guide * guide_available + self.missing_guide_token * (1 - guide_available)
+            if self.vq_in_guide:
+                ts_guide, indices, commit_loss_guide = self.guide_vq(ts_guide)
+                commit_loss += commit_loss_guide
 
         # prepare coordinates
-        ctx_coords = repeat(ctx_coords, "b c h w -> (b t) c h w", t=T)
-        ctx_coords = rearrange(ctx_coords, "b c (h p1) (w p2) -> b c h w (p1 p2)",
-                               p1=self.patch_size[0], p2=self.patch_size[1])
-        ctx_coords = ctx_coords.mean(dim=-1)
-        ts_coords = repeat(ts_coords, "b c h w -> (b t) c h w", t=T)
-        src_enc_pos_emb = self.enc_pos_emb(ctx_coords)
-        tgt_pos_emb = self.enc_pos_emb(ts_coords)
+        # temporal transformer
+        latent_ts_sequence = self.ts_encoder(ts)
+        ts_embedding = latent_ts_sequence
+        latent_ts = rearrange(latent_ts_sequence, "b t c -> (b t) c").unsqueeze(1)
 
-        # vision transformer
-        if self.ctx_masking_ratio > 0 and mask:
-            p = self.ctx_masking_ratio * random.random()
-            ctx, _, ids_restore, ids_keep = self.random_masking(ctx, p)
-            src_enc_pos_emb = tuple(
-                torch.gather(
-                    pos_emb,
-                    dim=1,
-                    index=ids_keep.unsqueeze(-1).repeat(1, 1, pos_emb.shape[-1]),
+        if self.use_nwp:
+            latent_guide = self.guide_encoder(ts_guide)  # B,T,D -> B,T,D
+            latent_guide = rearrange(latent_guide, "b t c -> (b t) c").unsqueeze(1)
+            latent_ts = latent_ts + latent_guide
+
+        if self.use_satellite:
+            ctx_coords = repeat(ctx_coords, "b c h w -> (b t) c h w", t=T)
+            ctx_coords = rearrange(
+                ctx_coords,
+                "b c (h p1) (w p2) -> b c h w (p1 p2)",
+                p1=self.patch_size[0],
+                p2=self.patch_size[1],
+            ).mean(dim=-1)
+            ts_coords = repeat(ts_coords, "b c h w -> (b t) c h w", t=T)
+            src_enc_pos_emb = self.enc_pos_emb(ctx_coords)
+            tgt_pos_emb = self.enc_pos_emb(ts_coords)
+
+            if self.ctx_masking_ratio > 0 and mask:
+                p = (
+                    self.ctx_masking_ratio * random.random()
+                    if self.masking_policy == "legacy_random_ratio"
+                    else self.ctx_masking_ratio
                 )
-                for pos_emb in src_enc_pos_emb
+                ctx, _, ids_restore, ids_keep = self.random_masking(ctx, p)
+                src_enc_pos_emb = tuple(
+                    torch.gather(
+                        pos_emb,
+                        dim=1,
+                        index=ids_keep.unsqueeze(-1).repeat(1, 1, pos_emb.shape[-1]),
+                    )
+                    for pos_emb in src_enc_pos_emb
+                )
+            latent_ctx, self_attention_scores = self.ctx_encoder(ctx, src_enc_pos_emb)
+            latent_ts, cross_attention_scores = self.mixer(
+                latent_ctx, latent_ts, src_enc_pos_emb, tgt_pos_emb
             )
-        latent_ctx, self_attention_scores = self.ctx_encoder(ctx, src_enc_pos_emb)
-        
-        # temporal transformer
-        latent_ts = self.ts_encoder(ts)
-        latent_ts = rearrange(latent_ts, "b t c -> (b t) c").unsqueeze(1)
 
-        # temporal transformer
-        latent_guide = self.guide_encoder(ts_guide)  # B,T,64 -> B,T,64
-        latent_guide = rearrange(latent_guide, "b t c -> (b t) c").unsqueeze(1)
-        latent_ts = latent_ts + latent_guide
-
-        # cross attention
-        latent_ts, cross_attention_scores = self.mixer(
-            latent_ctx, latent_ts, src_enc_pos_emb, tgt_pos_emb
-        )
         latent_ts = latent_ts.squeeze(1)
-        latent_ts = self.ts_enctodec(rearrange(latent_ts, "(b t) c -> b t c", b=B))
+        fusion_embedding = rearrange(latent_ts, "(b t) c -> b t c", b=B)
+        latent_ts = self.ts_enctodec(fusion_embedding)
 
         y = self.temporal_transformer(latent_ts)
 
@@ -567,7 +673,58 @@ class FusionSF3M(nn.Module):
         outputs = torch.stack(outputs, dim=2)
         vq_loss = vq_loss + torch.mean(commit_loss)
 
+        if return_embeddings:
+            return outputs, {"ts": ts_embedding, "fusion": fusion_embedding}
         if self.training:
             return outputs, vq_loss
         else:
             return outputs
+
+    @staticmethod
+    def _pool_embedding(embedding: torch.Tensor, pooling: str) -> torch.Tensor:
+        if pooling == "none":
+            return embedding
+        if pooling == "mean":
+            return embedding.mean(dim=1)
+        if pooling == "last":
+            return embedding[:, -1]
+        raise ValueError("pooling must be none, mean, or last")
+
+    def extract_ts_embeddings(
+        self, ts: torch.Tensor, time_coords: torch.Tensor, pooling: str = "none"
+    ) -> torch.Tensor:
+        """Extract the historical-power representation without evaluating other modalities.
+
+        This is a read-only inference interface over the existing TS path used by
+        :meth:`forward`: cyclical time encoding, TS input projection, and the
+        checkpoint's TS Transformer.  It intentionally does not accept satellite,
+        NWP, target, or future-time tensors.
+        """
+        if ts.ndim != 3:
+            raise ValueError("ts must have shape [B, T, C]")
+        if time_coords.ndim != 5:
+            raise ValueError("time_coords must have shape [B, T, C, H, W]")
+        if ts.shape[0] != time_coords.shape[0] or ts.shape[1] != time_coords.shape[1]:
+            raise ValueError("ts and time_coords batch/time dimensions must match")
+        encoded_time = self.time_coords_encoder(time_coords)
+        embedded = self.ts_embedding(
+            torch.cat([ts, encoded_time[..., 0, 0]], dim=-1)
+        )
+        latent = self.ts_encoder(embedded)
+        return self._pool_embedding(latent, pooling)
+
+    def extract_embeddings(
+        self, batch: dict, embedding_type: str = "both", pooling: str = "none",
+        evaluation_mode: str = "full_modalities",
+    ):
+        """Extract aligned TS and/or fusion representations without changing prediction behavior."""
+        if embedding_type not in {"ts", "fusion", "both"}:
+            raise ValueError("embedding_type must be ts, fusion, or both")
+        _, embeddings = self.forward(
+            batch['stl_input'].float(), batch['stl_coords'].float(), batch['ts_input'].float(),
+            batch['ts_coords'].float(), batch['ts_time'].float(), batch['ec_input'].float(),
+            mask=False, modality_availability=batch.get('modality_availability'),
+            evaluation_mode=evaluation_mode, return_embeddings=True,
+        )
+        names = ("ts", "fusion") if embedding_type == "both" else (embedding_type,)
+        return {name: self._pool_embedding(embeddings[name], pooling) for name in names}

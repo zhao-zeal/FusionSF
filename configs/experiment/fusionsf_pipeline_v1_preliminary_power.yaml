@@ -1,0 +1,16 @@
+# @package _global_
+
+defaults:
+  - fusionsf_pipeline_v1_preliminary
+  - _self_
+
+experiment_id: ${now:%Y%m%d_%H%M%S}_fusionsf_fixedv1_clean30_power_sites${datamodule.dataset.num_sites}_seed${seed}
+task_name: ${experiment_id}
+
+datamodule:
+  dataset:
+    modality_mode: power
+
+pl_module:
+  model:
+    modality_mode: power

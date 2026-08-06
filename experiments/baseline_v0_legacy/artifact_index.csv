@@ -1,0 +1,10 @@
+experiment_id,artifact_type,path,preserved_in_place,notes
+fusionSF_train10_test10,run_dir,logs/fusionSF_train10_test10/runs/1,true,"Hydra config, CSV log, checkpoints, inputs, outputs, targets"
+fusionSF_power_optimized_train10_test10,run_dir,logs/fusionSF_power_optimized_train10_test10/runs/1,true,"Degenerate all-zero prediction run"
+fusionSF_power_nwp_optimized_train10_test10,run_dir,logs/fusionSF_power_nwp_optimized_train10_test10/runs/1,true,"Degenerate all-zero prediction run"
+fusionsf_zeroshot_train10_19_test0_9,run_dir,logs/fusionsf_zeroshot_train10_19_test0_9/runs/1,true,"Cross-site preliminary run"
+chronos2_mmsp_site0_9,run_dir,logs/chronos2_mmsp_site0_9,true,"Inputs, outputs, targets, metadata"
+chronos2_nwp_mmsp_site0_9,run_dir,logs/chronos2_nwp_mmsp_site0_9,true,"Inputs, outputs, targets, metadata"
+chronos2_future_nwp_only_mmsp_site0_9,run_dir,logs/chronos2_future_nwp_only_mmsp_site0_9,true,"Inputs, outputs, targets, metadata"
+all_legacy,summary,logs/EXPERIMENT_RESULTS.md,true,"Human-readable preliminary summary"
+all_legacy,summary,logs/all_results_summary.csv,true,"Machine-readable preliminary summary"

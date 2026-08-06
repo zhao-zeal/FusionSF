@@ -7,7 +7,7 @@ defaults:
   - datamodule: tscontext_3modal_dm.yaml
   - pl_module: fusionsf_3modal.yaml
   - callbacks: default.yaml
-  - logger: wandb # set logger here or use command line (e.g. `python train.py logger=tensorboard`)
+  - logger: csv # local logging avoids requiring the authors' W&B account
   - trainer: default.yaml
   - paths: default.yaml
   - extras: default.yaml

@@ -10,6 +10,10 @@
  
 </div>
 
+> Experiment provenance: first runs are indexed as `baseline_v0_legacy`; new leakage-safe work
+> uses `pipeline_v1_fixed`. Read [experiments/README.md](experiments/README.md) before running or
+> comparing experiments. Historical artifacts under `logs/` remain in place and unchanged.
+
 ## Description
 
 This is the official repository to the paper ["FusionSF: Fuse Heterogeneous Modalities in a Vector Quantized Framework for Robust Solar Power Forecasting"](https://arxiv.org/) by **Ziqing Ma**\*, **Wenwei Wang**\*, **Tian Zhou**\*, Chao Chen, Bingqing Peng, Liang Sun and Rong Jin.
@@ -72,6 +76,27 @@ pip install -r requirements.txt
 ## Experiments
 To help the users reproduce our results, we released the sbatch scripts that we used.
  - FusionSF (145M): ``scripts/fusionSF.sh``
+
+### Modality ablations
+
+The three FusionSF input combinations share the same datamodule, temporal
+split, and target windows. Only the model branches selected by
+`modality_mode` are evaluated:
+
+```bash
+# Historical power only
+python main.py experiment=fusionsf_power_only
+
+# Historical power + NWP
+python main.py experiment=fusionsf_power_nwp
+
+# Historical power + NWP + satellite (full FusionSF)
+python main.py experiment=fusionsf_all_modalities
+```
+
+The corresponding `modality_mode` values are `power`, `power_nwp`, and `all`.
+All three experiment configs use the local CSV logger configured in
+`configs/train.yaml`.
 
 [//]: # (## Hyperparameter tuning:)
 

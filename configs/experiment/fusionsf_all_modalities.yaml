@@ -1,0 +1,14 @@
+# @package _global_
+
+# Full FusionSF input: historical power + NWP + satellite images.
+defaults:
+  - fusionsf_3modal
+  - _self_
+
+datamodule:
+  dataset:
+    modality_mode: all
+
+pl_module:
+  model:
+    modality_mode: all

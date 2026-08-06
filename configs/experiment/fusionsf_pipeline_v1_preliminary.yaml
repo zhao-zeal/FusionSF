@@ -1,0 +1,40 @@
+# @package _global_
+
+# Shared budget and data contract for the first comparable fixed_v1 modality suite.
+defaults:
+  - fusionsf_pipeline_v1_fixed
+  - _self_
+
+experiment_stage: preliminary_seed42
+seed: 42
+
+trainer:
+  max_epochs: 30
+  deterministic: true
+  strategy: null
+
+datamodule:
+  dataset:
+    num_sites: 10
+    num_ignored_sites: 0
+  batch_size: 16
+  test_batch_size: 64
+
+pl_module:
+  evaluation_mode: full_modalities
+  model:
+    guide_channels: 15
+    masking_policy: fixed_ratio
+    output_activation: identity
+    ctx_masking_ratio: 0.0
+    ts_masking_ratio: 0.0
+    satellite_modality_dropout: 0.0
+    nwp_modality_dropout: 0.0
+    vq_in_ts: false
+    vq_in_ctx: false
+    vq_in_guide: false
+
+callbacks:
+  early_stopping:
+    monitor: val/mae
+    patience: 10

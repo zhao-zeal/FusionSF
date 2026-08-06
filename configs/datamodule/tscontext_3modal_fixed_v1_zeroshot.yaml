@@ -1,0 +1,33 @@
+_target_: src.datamodules.tscontext_3modal_datamodule.Ts3MDataModule
+
+dataset:
+  data_dir: ${paths.data_dir}
+  satellite_dir: satellite
+  seq_len: 24
+  label_len: 0
+  pred_len: 24
+  num_sites: 20
+  num_ignored_sites: 10
+  modality_mode: all
+  data_pipeline:
+    version: fixed_v1
+    split_version: chronological_target_split_v1
+    scaler_version: train_sites_and_time_only_fit_v1
+    preserve_legacy_pipeline: true
+  dataset_test:
+    data_dir: ${paths.data_dir}
+    satellite_dir: satellite
+    seq_len: 24
+    label_len: 0
+    pred_len: 24
+    num_sites: 10
+    num_ignored_sites: 0
+    modality_mode: all
+
+batch_size: 16
+test_batch_size: 64
+num_workers: 4
+pin_memory: true
+train_ratio: 0.6
+valid_ratio: 0.2
+test_ratio: 0.2
