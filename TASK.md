@@ -4,7 +4,15 @@ Last updated: 2026-08-15
 
 ## Active
 
-- No experiment is currently running.
+- `chronos_reverse_guidance_task1_3_20260815`: approved Task 1-3 study of
+  frozen Chronos-2 temporal representations injected into the current fixed-v1
+  Partial-VQ FusionSF. The fixed MMSP protocol is train/validation/test sites
+  10-19/20-21/0-9, seq/pred 24/24, seed 42. The three fair arms are the unchanged
+  FusionSF baseline, a 49.3k-parameter history-power MLP control, and a 49.2k-
+  parameter projection of mean-pooled frozen Chronos-2 encoder states. Training
+  and validation are chronological slices from sites 10-19; the held-out test
+  sites are 0-9. Guided-VQ
+  and all out-of-scope datasets/models remain deferred until this gate is reviewed.
 
 ## Completed / reviewed
 

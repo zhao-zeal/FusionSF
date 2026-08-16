@@ -47,6 +47,7 @@ class Pl3Modal(ContextMixerModule):
             x_ctx, ctx_coords, x_ts, ts_coords, time_coords, x_ec, mask,
             modality_availability=batch.get('modality_availability'),
             evaluation_mode=self.evaluation_mode,
+            chronos_representation=batch.get('chronos_representation'),
         )
         return out, y_ts, y_prev_ts, x_ts
 

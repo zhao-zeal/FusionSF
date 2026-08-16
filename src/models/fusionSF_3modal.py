@@ -9,6 +9,7 @@ from vector_quantize_pytorch import ResidualVQ
 
 from src.models.modules.attention_modules import *
 from src.models.modules.positional_encoding import PositionalEncoding2D
+from src.models.temporal_prior import TemporalPriorInjector
 
 
 class AxialRotaryEmbedding(nn.Module):
@@ -298,6 +299,9 @@ class FusionSF3M(nn.Module):
         random_missing_probability: float = 0.5,
         satellite_modality_dropout: float = 0.0,
         nwp_modality_dropout: float = 0.0,
+        temporal_prior_mode: str = "none",
+        chronos_representation_dim: int = 768,
+        temporal_prior_mlp_hidden_dim: int = 553,
         **kwargs,
     ):
         super().__init__()
@@ -350,6 +354,13 @@ class FusionSF3M(nn.Module):
                 raise ValueError(f"{name} must be in [0, 1]")
         self.satellite_modality_dropout = satellite_modality_dropout
         self.nwp_modality_dropout = nwp_modality_dropout
+        self.temporal_prior = TemporalPriorInjector(
+            mode=temporal_prior_mode,
+            fusion_dim=dim,
+            history_length=ts_length,
+            chronos_dim=chronos_representation_dim,
+            mlp_hidden_dim=temporal_prior_mlp_hidden_dim,
+        )
 
         if vq_in_ctx and not self.use_satellite:
             raise ValueError("vq_in_ctx requires modality_mode='all'")
@@ -531,6 +542,7 @@ class FusionSF3M(nn.Module):
         modality_availability: torch.Tensor = None,
         evaluation_mode: str = "full_modalities",
         return_embeddings: bool = False,
+        chronos_representation: torch.Tensor = None,
     ):
         """
         Args:
@@ -596,6 +608,9 @@ class FusionSF3M(nn.Module):
                 ctx, indices, commit_loss_ctx = self.ctx_vq(ctx)
                 commit_loss += commit_loss_ctx
 
+        # Preserve the historical power input for the parameter-matched MLP control.
+        history_power = ts
+
         # ts: to vq
         ts = torch.cat([ts, time_coords[..., 0, 0]], axis=-1)
         ts = self.ts_embedding(ts)
@@ -618,6 +633,11 @@ class FusionSF3M(nn.Module):
         # prepare coordinates
         # temporal transformer
         latent_ts_sequence = self.ts_encoder(ts)
+        latent_ts_sequence = self.temporal_prior(
+            latent_ts_sequence,
+            history_power=history_power,
+            chronos_representation=chronos_representation,
+        )
         ts_embedding = latent_ts_sequence
         latent_ts = rearrange(latent_ts_sequence, "b t c -> (b t) c").unsqueeze(1)
 
