@@ -49,11 +49,18 @@ def chronos_guided_residual_vq(
                 "Chronos guidance score shape does not match VQ distances: "
                 f"{tuple(similarity.shape)} vs {tuple(distance_logits.shape)}"
             )
-        # The installed VQ exposes negative Euclidean distance. Squaring its
-        # magnitude gives the requested -||x-e||^2 term without changing codes.
-        scores = -distance_logits.square() + guidance_lambda * similarity.to(distance_logits.dtype)
+        similarity = similarity.to(distance_logits.dtype)
+        # Preserve the VQ implementation's distance definition exactly. The
+        # only change to hard code selection is the Chronos similarity term.
+        scores = distance_logits + guidance_lambda * similarity
         raw_codes = codebook.embed.detach().to(scores.dtype).clone()
-        soft_codes = torch.einsum("hnk,hkd->hnd", scores.softmax(dim=-1), raw_codes)
+        # Detach the VQ distances only in the soft backward surrogate. This
+        # prevents the added surrogate from creating a second gradient path to
+        # TS tokens while retaining gradients to the Chronos projection.
+        surrogate_scores = distance_logits.detach() + guidance_lambda * similarity
+        soft_codes = torch.einsum(
+            "hnk,hkd->hnd", surrogate_scores.softmax(dim=-1), raw_codes
+        )
         surrogate_terms.append(soft_codes.reshape(tokens.shape))
         return original_sampler(scores, *args, **kwargs)
 

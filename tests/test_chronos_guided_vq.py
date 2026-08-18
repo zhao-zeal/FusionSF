@@ -80,6 +80,42 @@ def test_codebook_guidance_trains_chronos_projection_input():
     assert torch.count_nonzero(prior.grad).item() > 0
 
 
+def test_codebook_surrogate_does_not_add_ts_input_gradient():
+    vq = ResidualVQ(dim=2, num_quantizers=1, codebook_size=2, kmeans_init=False).eval()
+    codebook = vq.layers[0]._codebook
+    codebook.embed.copy_(torch.tensor([[[0.0, 1.0], [1.0, 0.0]]]))
+    tokens = torch.tensor([[[0.0, 0.9]]], requires_grad=True)
+    prior = torch.tensor([[0.8, 0.2]], requires_grad=True)
+
+    quantized, _, _ = chronos_guided_residual_vq(vq, tokens, prior, guidance_lambda=1.0)
+    token_grad, prior_grad = torch.autograd.grad(
+        quantized[..., 0].sum(), (tokens, prior), allow_unused=True
+    )
+
+    assert token_grad is None
+    assert prior_grad is not None
+    assert torch.count_nonzero(prior_grad).item() > 0
+
+
+def test_codebook_guidance_runs_full_shared_eight_quantizer_path():
+    vq = ResidualVQ(
+        dim=4, num_quantizers=8, codebook_size=8,
+        shared_codebook=True, kmeans_init=False,
+    ).eval()
+    tokens = torch.randn(2, 3, 4)
+    prior = torch.randn(2, 4, requires_grad=True)
+
+    quantized, indices, losses = chronos_guided_residual_vq(
+        vq, tokens, prior, guidance_lambda=0.5
+    )
+    quantized.sum().backward()
+
+    assert quantized.shape == tokens.shape
+    assert indices.shape == (2, 3, 8)
+    assert losses.shape[-1] == 8
+    assert prior.grad is not None
+
+
 def test_codebook_guided_config_only_changes_ts_vq_selection():
     with initialize_config_dir(config_dir=str(ROOT / "configs"), version_base="1.2"):
         cfg = compose(
