@@ -302,6 +302,8 @@ class FusionSF3M(nn.Module):
         temporal_prior_mode: str = "none",
         chronos_representation_dim: int = 768,
         temporal_prior_mlp_hidden_dim: int = 553,
+        chronos_vq_guidance_mode: str = "none",
+        chronos_vq_guidance_scale: float = 1.0,
         **kwargs,
     ):
         super().__init__()
@@ -356,6 +358,21 @@ class FusionSF3M(nn.Module):
         self.nwp_modality_dropout = nwp_modality_dropout
         self.temporal_prior = TemporalPriorInjector(
             mode=temporal_prior_mode,
+            fusion_dim=dim,
+            history_length=ts_length,
+            chronos_dim=chronos_representation_dim,
+            mlp_hidden_dim=temporal_prior_mlp_hidden_dim,
+        )
+        if chronos_vq_guidance_mode not in {"none", "pre_ts_vq"}:
+            raise ValueError("chronos_vq_guidance_mode must be none or pre_ts_vq")
+        if chronos_vq_guidance_mode == "pre_ts_vq" and not vq_in_ts:
+            raise ValueError("pre_ts_vq Chronos guidance requires vq_in_ts=true")
+        if chronos_vq_guidance_mode != "none" and temporal_prior_mode != "none":
+            raise ValueError("Chronos VQ guidance and post-encoder temporal prior are mutually exclusive")
+        self.chronos_vq_guidance_mode = chronos_vq_guidance_mode
+        self.chronos_vq_guidance_scale = float(chronos_vq_guidance_scale)
+        self.chronos_vq_guidance = TemporalPriorInjector(
+            mode="chronos" if chronos_vq_guidance_mode == "pre_ts_vq" else "none",
             fusion_dim=dim,
             history_length=ts_length,
             chronos_dim=chronos_representation_dim,
@@ -617,6 +634,13 @@ class FusionSF3M(nn.Module):
         if self.ts_masking_ratio > 0 and mask:
             ts_missing = torch.rand(B, T, device=ts.device) < self.ts_masking_ratio
             ts = torch.where(ts_missing.unsqueeze(-1), self.ts_mask_token.expand_as(ts), ts)
+        if self.chronos_vq_guidance_mode == "pre_ts_vq":
+            guidance = self.chronos_vq_guidance.project_prior(
+                ts,
+                history_power=history_power,
+                chronos_representation=chronos_representation,
+            )
+            ts = ts + self.chronos_vq_guidance_scale * guidance.unsqueeze(1)
         if self.vq_in_ts:
             ts, indices, commit_loss_ts = self.ts_vq(ts)
             commit_loss += commit_loss_ts

@@ -1,20 +1,27 @@
 # FusionSF Project Status
 
-Last updated: 2026-08-15
+Last updated: 2026-08-18
 
 ## Active
 
-- `chronos_reverse_guidance_task1_3_20260815`: approved Task 1-3 study of
-  frozen Chronos-2 temporal representations injected into the current fixed-v1
-  Partial-VQ FusionSF. The fixed MMSP protocol is train/validation/test sites
-  10-19/20-21/0-9, seq/pred 24/24, seed 42. The three fair arms are the unchanged
-  FusionSF baseline, a 49.3k-parameter history-power MLP control, and a 49.2k-
-  parameter projection of mean-pooled frozen Chronos-2 encoder states. Training
-  and validation are chronological slices from sites 10-19; the held-out test
-  sites are 0-9. Guided-VQ
-  and all out-of-scope datasets/models remain deferred until this gate is reviewed.
+- None.
 
 ## Completed / reviewed
+
+- `chronos_guided_vq_task4_20260816`: completed and audited the approved seed-42
+  MMSP follow-up. Conditioning the TS VQ input with the frozen Chronos-2 768-to-64
+  projection reached MAE/RMSE 0.041070/0.086441 versus the Task 1 baseline's
+  0.042309/0.090032 (improvements of 2.927%/3.989%). This is the best result in
+  the four-arm gate, but the incremental MAE gain over the frozen-prior arm is
+  only 0.196% and has not been validated across seeds. See
+  `reports/chronos_guided_vq_task4_20260816_acceptance.md`.
+
+- `chronos_reverse_guidance_task1_3_20260815`: completed the seed-42 MMSP
+  three-arm gate. Training and validation are the first 60% and next 20%
+  chronological slices of sites 10-19; testing is the final 20% slice of unseen
+  sites 0-9, and sites 20-21 are not used. Baseline, parameter-matched history
+  MLP, and frozen Chronos-2 prior reached MAE/RMSE 0.042309/0.090032,
+  0.045678/0.087989, and 0.041151/0.087312, respectively.
 
 - `night_reproduction_20260806`: completed the seed-42 MMSP legacy, fixed_v1,
   cross-site zero-shot, VQ-ablation, Chronos-2 baseline, and Stage4b seed-2021

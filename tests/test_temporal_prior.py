@@ -38,3 +38,12 @@ def test_chronos_mode_rejects_missing_or_wrong_shape():
         injector(tokens, history)
     with pytest.raises(ValueError, match="must have shape"):
         injector(tokens, history, torch.zeros(2, 6))
+
+
+def test_project_prior_can_condition_vq_input_without_post_encoder_residual():
+    injector = TemporalPriorInjector("chronos", fusion_dim=4, history_length=3, chronos_dim=5)
+    tokens, history = torch.zeros(2, 3, 4), torch.zeros(2, 3, 1)
+    representation = torch.randn(2, 5)
+    guidance = injector.project_prior(tokens, history, representation)
+    assert guidance.shape == (2, 4)
+    torch.testing.assert_close(injector(tokens, history, representation), guidance.unsqueeze(1).expand(-1, 3, -1))

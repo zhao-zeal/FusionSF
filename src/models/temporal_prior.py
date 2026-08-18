@@ -53,8 +53,24 @@ class TemporalPriorInjector(nn.Module):
             raise ValueError("power_tokens must have shape [B, T, D]")
         if history_power.ndim != 3 or history_power.shape[:2] != power_tokens.shape[:2]:
             raise ValueError("history_power must align with power_tokens as [B, T, C]")
-        if self.mode == "none":
+        prior = self.project_prior(power_tokens, history_power, chronos_representation)
+        if prior is None:
             return power_tokens
+        return power_tokens + prior.unsqueeze(1)
+
+    def project_prior(
+        self,
+        power_tokens: torch.Tensor,
+        history_power: torch.Tensor,
+        chronos_representation: torch.Tensor | None = None,
+    ) -> torch.Tensor | None:
+        """Project one global prior without deciding where it is injected."""
+        if power_tokens.ndim != 3:
+            raise ValueError("power_tokens must have shape [B, T, D]")
+        if history_power.ndim != 3 or history_power.shape[:2] != power_tokens.shape[:2]:
+            raise ValueError("history_power must align with power_tokens as [B, T, C]")
+        if self.mode == "none":
+            return None
         if self.mode == "mlp":
             if history_power.shape[1] != self.history_length:
                 raise ValueError("history_power length does not match the configured history_length")
@@ -68,4 +84,4 @@ class TemporalPriorInjector(nn.Module):
                     f"[B, {self.chronos_dim}], got {tuple(chronos_representation.shape)}"
                 )
             prior = self.projection(chronos_representation.to(power_tokens.dtype))
-        return power_tokens + prior.unsqueeze(1)
+        return prior
