@@ -1,10 +1,13 @@
 # FusionSF Project Status
 
-Last updated: 2026-08-18
+Last updated: 2026-08-19
 
 ## Active
 
-- None.
+- `chronos_codebook_guided_ts_vq`: implementation and focused unit tests are
+  complete. The new mode adds frozen-Chronos similarity only to TS codebook
+  selection and exactly follows the original VQ path at lambda zero. No training
+  or large experiment has been run.
 
 ## Completed / reviewed
 
@@ -47,7 +50,7 @@ Last updated: 2026-08-18
 
 ## Planned
 
-- No Fusion method change is planned; the completed negative result is retained without tuning.
+- Review the codebook-guided implementation before authorizing any MMSP training run.
 
 ## Boundaries
 

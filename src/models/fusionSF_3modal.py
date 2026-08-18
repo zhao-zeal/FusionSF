@@ -7,6 +7,8 @@ from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 from vector_quantize_pytorch import ResidualVQ
 
+from src.models.chronos_guided_vq import chronos_guided_residual_vq
+
 from src.models.modules.attention_modules import *
 from src.models.modules.positional_encoding import PositionalEncoding2D
 from src.models.temporal_prior import TemporalPriorInjector
@@ -304,6 +306,7 @@ class FusionSF3M(nn.Module):
         temporal_prior_mlp_hidden_dim: int = 553,
         chronos_vq_guidance_mode: str = "none",
         chronos_vq_guidance_scale: float = 1.0,
+        chronos_vq_guidance_lambda: float = 1.0,
         **kwargs,
     ):
         super().__init__()
@@ -363,16 +366,19 @@ class FusionSF3M(nn.Module):
             chronos_dim=chronos_representation_dim,
             mlp_hidden_dim=temporal_prior_mlp_hidden_dim,
         )
-        if chronos_vq_guidance_mode not in {"none", "pre_ts_vq"}:
-            raise ValueError("chronos_vq_guidance_mode must be none or pre_ts_vq")
-        if chronos_vq_guidance_mode == "pre_ts_vq" and not vq_in_ts:
-            raise ValueError("pre_ts_vq Chronos guidance requires vq_in_ts=true")
+        if chronos_vq_guidance_mode not in {"none", "pre_ts_vq", "codebook_guided"}:
+            raise ValueError(
+                "chronos_vq_guidance_mode must be none, pre_ts_vq, or codebook_guided"
+            )
+        if chronos_vq_guidance_mode != "none" and not vq_in_ts:
+            raise ValueError(f"{chronos_vq_guidance_mode} Chronos guidance requires vq_in_ts=true")
         if chronos_vq_guidance_mode != "none" and temporal_prior_mode != "none":
             raise ValueError("Chronos VQ guidance and post-encoder temporal prior are mutually exclusive")
         self.chronos_vq_guidance_mode = chronos_vq_guidance_mode
         self.chronos_vq_guidance_scale = float(chronos_vq_guidance_scale)
+        self.chronos_vq_guidance_lambda = float(chronos_vq_guidance_lambda)
         self.chronos_vq_guidance = TemporalPriorInjector(
-            mode="chronos" if chronos_vq_guidance_mode == "pre_ts_vq" else "none",
+            mode="chronos" if chronos_vq_guidance_mode != "none" else "none",
             fusion_dim=dim,
             history_length=ts_length,
             chronos_dim=chronos_representation_dim,
@@ -642,7 +648,21 @@ class FusionSF3M(nn.Module):
             )
             ts = ts + self.chronos_vq_guidance_scale * guidance.unsqueeze(1)
         if self.vq_in_ts:
-            ts, indices, commit_loss_ts = self.ts_vq(ts)
+            if self.chronos_vq_guidance_mode == "codebook_guided":
+                if self.chronos_vq_guidance_lambda == 0.0:
+                    # Exact baseline path: do not even evaluate the Chronos projection.
+                    ts, indices, commit_loss_ts = self.ts_vq(ts)
+                else:
+                    guidance = self.chronos_vq_guidance.project_prior(
+                        ts,
+                        history_power=history_power,
+                        chronos_representation=chronos_representation,
+                    )
+                    ts, indices, commit_loss_ts = chronos_guided_residual_vq(
+                        self.ts_vq, ts, guidance, self.chronos_vq_guidance_lambda
+                    )
+            else:
+                ts, indices, commit_loss_ts = self.ts_vq(ts)
             commit_loss += commit_loss_ts
 
         # NWP guide is only encoded for modes that explicitly enable it.
