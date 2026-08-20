@@ -17,7 +17,8 @@ dataset:
 
 batch_size: 16
 test_batch_size: 64
-num_workers: 4
+# Stability-first protocol: fetch batches in the trainer process.
+num_workers: 0
 pin_memory: true
 train_ratio: 0.6
 valid_ratio: 0.2

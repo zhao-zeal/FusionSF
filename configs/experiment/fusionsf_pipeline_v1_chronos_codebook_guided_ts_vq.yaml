@@ -1,0 +1,12 @@
+# @package _global_
+
+defaults:
+  - fusionsf_pipeline_v1_chronos_guided_ts_vq
+  - _self_
+
+task_name: ${now:%Y%m%d_%H%M%S}_fusionsf_fixedv1_chronos_codebook_guided_ts_vq_seed${seed}
+
+pl_module:
+  model:
+    chronos_vq_guidance_mode: codebook_guided
+    chronos_vq_guidance_lambda: 1.0

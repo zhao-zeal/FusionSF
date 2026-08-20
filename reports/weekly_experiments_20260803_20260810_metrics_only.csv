@@ -1,0 +1,15 @@
+阶段,实验,MAE,RMSE
+阶段1-Legacy,同域-VQ关闭,0.041337,0.092346
+阶段1-Legacy,同域-Partial VQ,0.040386,0.087665
+阶段1-Legacy,Zero-shot-VQ关闭,0.042496,0.091152
+阶段1-Legacy,Zero-shot-Partial VQ（退化）,0.178766,0.304493
+阶段1-Legacy,Zero-shot-Partial VQ（Identity修复）,0.042265,0.089217
+阶段2-fixed_v1,同域-VQ关闭,0.042091,0.094815
+阶段2-fixed_v1,同域-Partial VQ,0.043605,0.095823
+阶段2-fixed_v1,Zero-shot-VQ关闭,0.043717,0.090866
+阶段2-fixed_v1,Zero-shot-Partial VQ,0.042713,0.086451
+阶段3-Chronos-2,Power only,0.066126,0.137008
+阶段3-Chronos-2,Power + Future NWP,0.067580,0.138407
+阶段4-Adapter,旧VQ-off Token-对齐,0.050859,0.098769
+阶段4-Adapter,最新Partial VQ Token-对齐,0.046356,0.097612
+阶段4-Adapter,最新Partial VQ Token-打乱对照,0.070950,0.139920

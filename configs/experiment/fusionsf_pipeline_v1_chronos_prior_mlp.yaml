@@ -1,0 +1,12 @@
+# @package _global_
+
+defaults:
+  - fusionsf_pipeline_v1_chronos_prior_baseline
+  - _self_
+
+experiment_id: ${now:%Y%m%d_%H%M%S}_fusionsf_fixedv1_chronos_prior_mlp_seed${seed}
+task_name: ${experiment_id}
+
+pl_module:
+  model:
+    temporal_prior_mode: mlp

@@ -1,10 +1,39 @@
+from pathlib import Path
 from typing import Any, Dict, Optional
+import json
 import numpy as np
+import torch
 from omegaconf import OmegaConf
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset, Subset
 
 from src.datasets.tscontext_3modal_dataset import Ts3MDataset
+
+
+class CachedRepresentationDataset(Dataset):
+    """Attach an immutable, row-aligned representation array to a dataset."""
+
+    def __init__(self, dataset: Dataset, representation_path: Path):
+        self.dataset = dataset
+        self.representations = np.load(representation_path, mmap_mode="r")
+        if self.representations.ndim != 2:
+            raise ValueError("cached representations must have shape [N, D]")
+        if len(self.representations) != len(dataset):
+            raise ValueError(
+                f"cache rows ({len(self.representations)}) do not match dataset rows ({len(dataset)})"
+            )
+        if not np.isfinite(self.representations).all():
+            raise ValueError("cached representations contain NaN or Inf")
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index):
+        sample = dict(self.dataset[index])
+        sample["chronos_representation"] = torch.from_numpy(
+            np.array(self.representations[index], dtype=np.float32, copy=True)
+        )
+        return sample
 
 
 class Ts3MDataModule(LightningDataModule):
@@ -17,7 +46,8 @@ class Ts3MDataModule(LightningDataModule):
         pin_memory: bool = False,
         train_ratio: float = 0.6,
         valid_ratio: float = 0.2,
-        test_ratio: float = 0.2
+        test_ratio: float = 0.2,
+        representation_cache_dir: Optional[str] = None,
     ):
         super().__init__()
 
@@ -26,6 +56,7 @@ class Ts3MDataModule(LightningDataModule):
         self.valid_ratio = valid_ratio
         self.test_ratio = test_ratio
         self.test_batch_size = test_batch_size or batch_size
+        self.representation_cache_dir = representation_cache_dir
 
         # this line allows to access init params with 'self.hparams' attribute
         # also ensures init params will be stored in ckpt
@@ -88,6 +119,7 @@ class Ts3MDataModule(LightningDataModule):
                     ])
                     self.data_test_all = data_all_test
                     self.data_test = Subset(data_all_test, np.flatnonzero(test_split_ids == 2))
+                self._attach_representation_cache()
                 return
             data_len = len(data_all)
             all_indices = np.arange(0, int(data_len))
@@ -107,6 +139,31 @@ class Ts3MDataModule(LightningDataModule):
                 N, L = all_indices_test.shape
                 test_indices = all_indices_test[:, -int(L * test_ratio):].reshape(-1)
                 self.data_test = Subset(data_all_test, test_indices)
+
+    def _attach_representation_cache(self):
+        if not self.representation_cache_dir:
+            return
+        cache_dir = Path(self.representation_cache_dir)
+        manifest_path = cache_dir / "manifest.json"
+        if not manifest_path.exists():
+            raise FileNotFoundError(f"representation cache manifest not found: {manifest_path}")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("pooling") != "mean" or manifest.get("final_shape", [None])[-1] != 768:
+            raise ValueError("representation cache must contain mean-pooled 768-d Chronos-2 embeddings")
+        for split, attribute in (
+            ("train", "data_train"), ("validation", "data_val"), ("test", "data_test")
+        ):
+            dataset = getattr(self, attribute)
+            expected = manifest.get("splits", {}).get(split, {}).get("rows")
+            if expected != len(dataset):
+                raise ValueError(
+                    f"manifest {split} rows ({expected}) do not match dataset rows ({len(dataset)})"
+                )
+            setattr(
+                self,
+                attribute,
+                CachedRepresentationDataset(dataset, cache_dir / f"{split}_mean.npy"),
+            )
 
     def train_dataloader(self):
         return DataLoader(

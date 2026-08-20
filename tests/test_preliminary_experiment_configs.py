@@ -23,6 +23,7 @@ def test_preliminary_seed42_configs_share_one_budget_and_correct_modalities():
             assert cfg.callbacks.early_stopping.monitor == "val/mae"
             assert cfg.callbacks.early_stopping.patience == 10
             assert cfg.trainer.get("limit_train_batches", 1.0) == 1.0
+            assert cfg.datamodule.num_workers == 0
             assert cfg.datamodule.dataset.modality_mode == mode
             assert cfg.pl_module.model.modality_mode == mode
             assert cfg.pl_module.model.masking_policy == "fixed_ratio"
@@ -42,3 +43,29 @@ def test_preliminary_seed42_configs_share_one_budget_and_correct_modalities():
             else:
                 assert cfg.datamodule.dataset.dataset_test.num_sites == test_sites
                 assert cfg.datamodule.dataset.dataset_test.num_ignored_sites == 0
+
+
+def test_chronos_vq_experiments_use_stable_single_process_mmsp_loading():
+    experiments = (
+        "fusionsf_pipeline_v1_chronos_prior_baseline",
+        "fusionsf_pipeline_v1_chronos_guided_ts_vq",
+        "fusionsf_pipeline_v1_chronos_codebook_guided_ts_vq",
+    )
+    with initialize_config_dir(config_dir=str(ROOT / "configs"), version_base="1.2"):
+        for experiment in experiments:
+            cfg = compose(config_name="train.yaml", overrides=[f"experiment={experiment}"])
+            assert cfg.datamodule.num_workers == 0
+            assert cfg.datamodule.batch_size == 16
+            assert cfg.datamodule.test_batch_size == 64
+            assert cfg.datamodule.dataset.num_sites == 20
+            assert cfg.datamodule.dataset.num_ignored_sites == 10
+            assert cfg.datamodule.dataset.dataset_test.num_sites == 10
+            assert cfg.datamodule.dataset.dataset_test.num_ignored_sites == 0
+            assert cfg.datamodule.dataset.seq_len == 24
+            assert cfg.datamodule.dataset.pred_len == 24
+            assert cfg.datamodule.dataset.data_pipeline.split_version == (
+                "chronological_target_split_v1"
+            )
+            assert cfg.datamodule.dataset.data_pipeline.scaler_version == (
+                "train_sites_and_time_only_fit_v1"
+            )

@@ -1,0 +1,14 @@
+# @package _global_
+
+defaults:
+  - fusionsf_pipeline_v1_legacy_matched_zeroshot_vq_paper_best
+  - _self_
+
+experiment_id: ${now:%Y%m%d_%H%M%S}_fusionsf_fixedv1_chronos_prior_baseline_seed${seed}
+task_name: ${experiment_id}
+
+pl_module:
+  model:
+    temporal_prior_mode: none
+    chronos_representation_dim: 768
+    temporal_prior_mlp_hidden_dim: 553
